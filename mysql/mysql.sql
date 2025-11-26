@@ -1,5 +1,3 @@
-create database violet;
-
 use violet;
 
 create table conversation_core_info

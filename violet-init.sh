@@ -4,6 +4,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+docker cp "$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/" violet-kafka-connect:/kafka/connect/
+echo "Restarting Kafka Connect container..."
+docker restart violet-kafka-connect
+
 # Load MySQL schema into the running container
 if docker ps --format '{{.Names}}' | grep -q '^violet-mysql$'; then
     docker exec -i violet-mysql mysql -uroot -proot < "$SCRIPT_DIR/mysql/mysql.sql"
@@ -30,10 +34,6 @@ bash "$SCRIPT_DIR/milvus/milvus.sh"
 echo "Milvus collections created."
 
 # Debezium connectors
-docker cp "$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/" violet-kafka-connect:/kafka/connect/
-echo "Restarting Kafka Connect container..."
-docker restart violet-kafka-connect
-echo "Kafka Connect restarted."
 bash "$SCRIPT_DIR/debezium/debezium.sh"
 
 echo "Debezium connectors configured."

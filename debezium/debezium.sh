@@ -2,6 +2,16 @@
 
 set -e
 
+pretty_print() {
+  if command -v jq >/dev/null 2>&1; then
+    jq
+  elif command -v python >/dev/null 2>&1; then
+    python -m json.tool
+  else
+    cat
+  fi
+}
+
 # Create MySQL source connector
 echo "Creating MySQL source connector..."
 curl -sS -X POST http://localhost:8083/connectors \
@@ -38,7 +48,7 @@ sleep 5
 
 # Check MySQL source status
 echo "Checking MySQL source connector status..."
-curl -s http://localhost:8083/connectors/mysql-source/status | jq
+curl -s http://localhost:8083/connectors/mysql-source/status | pretty_print
 
 # Create Milvus sink connector
 echo "Creating Milvus sink connector..."
@@ -60,6 +70,6 @@ sleep 5
 
 # Check Milvus sink status
 echo "Checking Milvus sink connector status..."
-curl -s http://localhost:8083/connectors/milvus-sink-user/status | jq
+curl -s http://localhost:8083/connectors/milvus-sink-user/status | pretty_print
 
 echo -e "\n\nDone!"

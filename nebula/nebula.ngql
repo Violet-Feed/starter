@@ -1,21 +1,17 @@
 ADD HOSTS "storaged0":9779
 :sleep 2;
 
-# Create Space 
 CREATE SPACE `violet` (partition_num = 10, replica_factor = 1, charset = utf8, collate = utf8_bin, vid_type = INT64);
-:sleep 2;
+:sleep 5;
 USE `violet`;
 
-# Create Tag: 
 CREATE TAG `creation` ( `creation_id` int64 NOT NULL, `title` string NOT NULL, `cover_url` string NULL, `user_id` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE TAG `user` ( `user_id` int64 NOT NULL, `username` string NOT NULL, `avatar` string NULL) ttl_duration = 0, ttl_col = "";
 
-# Create Edge: 
 CREATE EDGE `create` ( `timestamp` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE EDGE `digg` ( `timestamp` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE EDGE `follow` ( `timestamp` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 :sleep 2;
 
-# Create Index: 
 CREATE TAG INDEX `creation_id_index` ON `creation` ( `creation_id`);
 CREATE TAG INDEX `user_id_index` ON `user` ( `user_id`);

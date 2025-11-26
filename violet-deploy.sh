@@ -73,6 +73,12 @@ create_directories() {
     log_info "Connectors directory ready at $CONNECTORS_DIR"
 }
 
+relax_permissions() {
+    log_info "Setting permissive permissions for data directories (777)..."
+    chmod -R 777 "$DATA_ROOT"
+    log_success "Permissions updated: $DATA_ROOT"
+}
+
 validate_config_files() {
     log_info "Validating config files (used directly by docker-compose)..."
 
@@ -81,6 +87,7 @@ validate_config_files() {
         "$SCRIPT_DIR/milvus/user.yaml"
         "$SCRIPT_DIR/mysql/mysql.sql"
         "$SCRIPT_DIR/nebula/nebula.ngql"
+        "$SCRIPT_DIR/kvrocks/kvrocks.conf"
     )
 
     missing=0
@@ -101,6 +108,21 @@ validate_config_files() {
     else
         log_warning "Kafka connectors directory is empty: $CONNECTORS_DIR"
     fi
+}
+
+copy_kvrocks_config() {
+    log_info "Syncing kvrocks.conf to $DATA_ROOT/kvrocks ..."
+
+    local src="$SCRIPT_DIR/kvrocks/kvrocks.conf"
+    local dest="$DATA_ROOT/kvrocks/kvrocks.conf"
+
+    if [ ! -f "$src" ]; then
+        log_error "kvrocks config not found: $src"
+        exit 1
+    fi
+
+    cp "$src" "$dest"
+    log_success "kvrocks.conf copied to $dest"
 }
 
 pull_images() {
@@ -179,7 +201,9 @@ main() {
 
     check_docker
     create_directories
+    relax_permissions
     validate_config_files
+    copy_kvrocks_config
 
     read -p "Pull Docker images now? (y/n) " -n 1 -r
     echo

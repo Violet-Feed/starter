@@ -164,6 +164,38 @@ wait_for_services() {
     docker compose -f "$COMPOSE_FILE" ps
 }
 
+sync_kafka_connectors() {
+    local src="$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/"
+    local max_retries=3
+
+    if [ ! -d "$src" ]; then
+        log_warning "Milvus Kafka connector not found at $src, skip copying."
+        return
+    fi
+
+    for ((i=1; i<=max_retries; i++)); do
+        if docker ps --format '{{.Names}}' | grep -q '^violet-kafka-connect$'; then
+            break
+        fi
+        if [ $i -eq $max_retries ]; then
+            log_warning "violet-kafka-connect container is not running after $max_retries checks, skip copying."
+            return
+        fi
+        log_warning "violet-kafka-connect not running, retrying in 10s ($i/$max_retries)..."
+        sleep 10
+    done
+
+    log_info "Copying Milvus Kafka connector into violet-kafka-connect..."
+    docker cp "$src" violet-kafka-connect:/kafka/connect/
+
+    log_info "Restarting Kafka Connect container..."
+    docker restart violet-kafka-connect >/dev/null
+
+    log_info "Waiting 30s for Kafka Connect to reload plugins..."
+    sleep 30
+    log_success "Kafka Connect restarted with connector synced."
+}
+
 show_access_info() {
     echo ""
     log_success "Violet stack is ready."
@@ -210,6 +242,7 @@ main() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         start_services
         wait_for_services
+        sync_kafka_connectors
         show_access_info
     else
         log_info "Services not started. Run manually with:"

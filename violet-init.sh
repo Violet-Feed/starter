@@ -31,6 +31,9 @@ echo "Milvus collections created."
 
 # Debezium connectors
 docker cp "$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/" violet-kafka-connect:/kafka/connect/
+echo "Restarting Kafka Connect container..."
+docker restart violet-kafka-connect
+echo "Kafka Connect restarted."
 bash "$SCRIPT_DIR/debezium/debezium.sh"
 
 echo "Debezium connectors configured."

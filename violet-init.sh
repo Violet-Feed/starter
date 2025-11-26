@@ -30,6 +30,7 @@ bash "$SCRIPT_DIR/milvus/milvus.sh"
 echo "Milvus collections created."
 
 # Debezium connectors
+docker cp "$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/" violet-kafka-connect:/kafka/connect/
 bash "$SCRIPT_DIR/debezium/debezium.sh"
 
 echo "Debezium connectors configured."

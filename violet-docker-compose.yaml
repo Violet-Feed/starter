@@ -95,8 +95,6 @@ services:
       - CONNECT_REST_ADVERTISED_HOST_NAME=connect
       - CONNECT_LOG4J_LOGGERS=org.reflections=ERROR
       - PLUGIN_PATH=/kafka/connectors
-    volumes:
-      - ./debezium/connectors:/kafka/connectors:ro
     networks: [violet_net]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors || exit 1"]

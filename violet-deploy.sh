@@ -11,7 +11,6 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/violet-docker-compose.yaml"
 DATA_ROOT="$HOME/violet/mnt"
-CONNECTORS_DIR="$SCRIPT_DIR/debezium/connectors"
 
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -69,8 +68,6 @@ create_directories() {
         fi
     done
 
-    mkdir -p "$CONNECTORS_DIR"
-    log_info "Connectors directory ready at $CONNECTORS_DIR"
 }
 
 relax_permissions() {
@@ -101,12 +98,6 @@ validate_config_files() {
     if [ $missing -ne 0 ]; then
         log_error "Please add the missing files above; compose mounts them directly."
         exit 1
-    fi
-
-    if [ -d "$CONNECTORS_DIR" ] && [ "$(ls -A "$CONNECTORS_DIR" 2>/dev/null)" ]; then
-        log_success "Connectors found in $CONNECTORS_DIR"
-    else
-        log_warning "Kafka connectors directory is empty: $CONNECTORS_DIR"
     fi
 }
 

@@ -1,0 +1,301 @@
+# docker-compose -f violet-docker-compose.yaml up -d xxx
+version: "3.8"
+
+networks:
+  violet_net:
+    driver: bridge
+
+services:
+  # Redis
+  redis:
+    image: redis:5.0.14
+    container_name: violet-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ~/violet/mnt/redis/data:/data
+    networks: [violet_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Kvrocks
+  kvrocks:
+    image: apache/kvrocks:2.13.0
+    container_name: violet-kvrocks
+    ports:
+      - "6666:6666"
+    volumes:
+      - ~/violet/mnt/kvrocks:/var/lib/kvrocks
+    networks: [violet_net]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h 127.0.0.1 -p 6666 ping | grep PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka
+  kafka:
+    image: apache/kafka:4.0.0
+    hostname: kafka
+    container_name: violet-kafka
+    user: "1000:1000"
+    ports:
+      - "9092:9092"   # 内部 PLAINTEXT
+      - "9093:9093"   # Controller
+      - "9094:9094"   # 外部访问
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093,OUTSIDE://0.0.0.0:9094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,OUTSIDE:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,OUTSIDE://localhost:9094"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: "SQiCluster"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks: [violet_net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Kafka Connect
+  connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: violet-kafka-connect
+    depends_on:
+      - kafka
+      - mysql
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=kafka:9092
+      - GROUP_ID=connect-cluster
+      - CONFIG_STORAGE_TOPIC=_connect_configs
+      - OFFSET_STORAGE_TOPIC=_connect_offsets
+      - STATUS_STORAGE_TOPIC=_connect_status
+      - KEY_CONVERTER=org.apache.kafka.connect.storage.StringConverter
+      - VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - VALUE_CONVERTER_SCHEMAS_ENABLE=false
+      - KEY_CONVERTER_SCHEMAS_ENABLE=false
+      - CONNECT_REST_ADVERTISED_HOST_NAME=connect
+      - CONNECT_LOG4J_LOGGERS=org.reflections=ERROR
+      - PLUGIN_PATH=/kafka/connectors
+    volumes:
+      - ./debezium/connectors:/kafka/connectors:ro
+    networks: [violet_net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  # MySQL
+  mysql:
+    image: mysql:8.0.35-bullseye
+    container_name: violet-mysql
+    command:
+      --default-authentication-plugin=mysql_native_password
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_USER=debezium
+      - MYSQL_PASSWORD=123456
+      - MYSQL_DATABASE=violet
+    ports:
+      - "3306:3306"
+    volumes:
+      - ~/violet/mnt/mysql/data:/var/lib/mysql
+      - ./mysql/mysql.sql:/violet/mysql.sql:ro
+    networks: [violet_net]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -proot || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Milvus
+  milvus:
+    image: milvusdb/milvus:v2.6.4
+    container_name: violet-milvus
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - ETCD_USE_EMBED=true
+      - ETCD_DATA_DIR=/var/lib/milvus/etcd
+      - ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml
+      - COMMON_STORAGETYPE=local
+      - DEPLOY_MODE=STANDALONE
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # /healthz
+      - "2379:2379"     # 内嵌 etcd（可选）
+    volumes:
+      - ~/violet/mnt/milvus/data:/var/lib/milvus
+      - ./milvus/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
+      - ./milvus/user.yaml:/milvus/configs/user.yaml:ro
+    networks: [violet_net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9091/healthz || exit 1"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+
+  # Nebula Graph - Metad Service
+  metad0:
+    image: docker.io/vesoft/nebula-metad:v3.8.0
+    container_name: violet-nebula-metad0
+    environment:
+      USER: root
+    command:
+      - --meta_server_addrs=metad0:9559
+      - --local_ip=metad0
+      - --ws_ip=metad0
+      - --port=9559
+      - --ws_http_port=19559
+      - --data_path=/data/meta
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://metad0:19559/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    ports:
+      - 9559:9559
+      - 19559:19559
+      - 19560
+    volumes:
+      - ~/violet/mnt/nebula/data/meta0:/data/meta
+      - ~/violet/mnt/nebula/logs/meta0:/logs
+    networks:
+      - violet_net
+    restart: on-failure
+    cap_add:
+      - SYS_PTRACE
+
+  # Nebula Graph - Storaged Service
+  storaged0:
+    image: docker.io/vesoft/nebula-storaged:v3.8.0
+    container_name: violet-nebula-storaged0
+    environment:
+      USER: root
+      TZ:   "${TZ}"
+    command:
+      - --meta_server_addrs=metad0:9559
+      - --local_ip=storaged0
+      - --ws_ip=storaged0
+      - --port=9779
+      - --ws_http_port=19779
+      - --data_path=/data/storage
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    depends_on:
+      - metad0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://storaged0:19779/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    ports:
+      - 9779:9779
+      - 19779:19779
+      - 19780
+    volumes:
+      - ~/violet/mnt/nebula/data/storage0:/data/storage
+      - ~/violet/mnt/nebula/logs/storage0:/logs
+    networks:
+      - violet_net
+    restart: on-failure
+    cap_add:
+      - SYS_PTRACE
+
+  # Nebula Graph - Graphd Service
+  graphd:
+    image: docker.io/vesoft/nebula-graphd:v3.8.0
+    container_name: violet-nebula-graphd
+    environment:
+      USER: root
+      TZ:   "${TZ}"
+    command:
+      - --meta_server_addrs=metad0:9559
+      - --port=9669
+      - --local_ip=graphd
+      - --ws_ip=graphd
+      - --ws_http_port=19669
+      - --log_dir=/logs
+      - --v=0
+      - --minloglevel=0
+    depends_on:
+      - storaged0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://graphd:19669/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    ports:
+      - 9669:9669
+      - 19669:19669
+      - 19670
+    volumes:
+      - ~/violet/mnt/nebula/logs/graph:/logs
+    networks:
+      - violet_net
+    restart: on-failure
+    cap_add:
+      - SYS_PTRACE
+
+  nebula-console:
+    image: docker.io/vesoft/nebula-console:v3.8.0
+    container_name: violet-nebula-console
+    entrypoint: ""
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./nebula/nebula.ngql:/violet/nebula.ngql:ro
+    depends_on:
+      - graphd
+    networks:
+      - violet_net
+    restart: on-failure
+
+  # Nebula Graph Studio - Web UI
+  nebula-studio:
+    image: vesoft/nebula-graph-studio:v3.10.0
+    container_name: violet-nebula-studio
+    environment:
+      USER: root
+    ports:
+      - 7001:7001
+    networks:
+      - violet_net
+    depends_on:
+      - graphd
+    restart: on-failure

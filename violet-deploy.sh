@@ -50,6 +50,9 @@ create_directories() {
     directories=(
         "$DATA_ROOT/redis/data"
         "$DATA_ROOT/kvrocks"
+        "$DATA_ROOT/rocketmq/store"
+        "$DATA_ROOT/rocketmq/logs"
+        "$DATA_ROOT/kafka/data"
         "$DATA_ROOT/mysql/data"
         "$DATA_ROOT/milvus/data"
         "$DATA_ROOT/nebula/data/meta0"
@@ -67,7 +70,6 @@ create_directories() {
             log_info "Exists: $dir"
         fi
     done
-
 }
 
 relax_permissions() {
@@ -77,14 +79,15 @@ relax_permissions() {
 }
 
 validate_config_files() {
-    log_info "Validating config files (used directly by docker-compose)..."
+    log_info "Validating config files (used directly or required by deployment)..."
 
     required_files=(
+        "$SCRIPT_DIR/rocketmq/broker.conf"
+        "$SCRIPT_DIR/kvrocks/kvrocks.conf"
         "$SCRIPT_DIR/milvus/embedEtcd.yaml"
         "$SCRIPT_DIR/milvus/user.yaml"
         "$SCRIPT_DIR/mysql/mysql.sql"
         "$SCRIPT_DIR/nebula/nebula.ngql"
-        "$SCRIPT_DIR/kvrocks/kvrocks.conf"
     )
 
     missing=0
@@ -92,13 +95,17 @@ validate_config_files() {
         if [ ! -f "$file" ]; then
             log_error "Missing: $file"
             missing=1
+        else
+            log_info "Found: $file"
         fi
     done
 
-    if [ $missing -ne 0 ]; then
-        log_error "Please add the missing files above; compose mounts them directly."
+    if [ "$missing" -ne 0 ]; then
+        log_error "Please add the missing files above before deployment."
         exit 1
     fi
+
+    log_success "Config file validation passed."
 }
 
 copy_kvrocks_config() {
@@ -106,11 +113,6 @@ copy_kvrocks_config() {
 
     local src="$SCRIPT_DIR/kvrocks/kvrocks.conf"
     local dest="$DATA_ROOT/kvrocks/kvrocks.conf"
-
-    if [ ! -f "$src" ]; then
-        log_error "kvrocks config not found: $src"
-        exit 1
-    fi
 
     cp "$src" "$dest"
     log_success "kvrocks.conf copied to $dest"
@@ -122,10 +124,12 @@ pull_images() {
     images=(
         "redis:5.0.14"
         "apache/kvrocks:2.13.0"
+        "apache/rocketmq:5.2.0"
         "apache/kafka:4.0.0"
+        "rootpublic/kafka-ui:0.7.2"
         "debezium/connect:2.7.3.Final"
         "mysql:8.0.35-bullseye"
-        "milvusdb/milvus:v2.6.4"
+        "milvusdb/milvus:v2.6.6"
         "vesoft/nebula-metad:v3.8.0"
         "vesoft/nebula-storaged:v3.8.0"
         "vesoft/nebula-graphd:v3.8.0"
@@ -164,47 +168,18 @@ wait_for_services() {
     docker compose -f "$COMPOSE_FILE" ps
 }
 
-sync_kafka_connectors() {
-    local src="$SCRIPT_DIR/debezium/connectors/zilliz-kafka-connect-milvus-1.0.0/"
-    local max_retries=3
-
-    if [ ! -d "$src" ]; then
-        log_warning "Milvus Kafka connector not found at $src, skip copying."
-        return
-    fi
-
-    for ((i=1; i<=max_retries; i++)); do
-        if docker ps --format '{{.Names}}' | grep -q '^violet-kafka-connect$'; then
-            break
-        fi
-        if [ $i -eq $max_retries ]; then
-            log_warning "violet-kafka-connect container is not running after $max_retries checks, skip copying."
-            return
-        fi
-        log_warning "violet-kafka-connect not running, retrying in 10s ($i/$max_retries)..."
-        sleep 10
-    done
-
-    log_info "Copying Milvus Kafka connector into violet-kafka-connect..."
-    docker cp "$src" violet-kafka-connect:/kafka/connect/
-
-    log_info "Restarting Kafka Connect container..."
-    docker restart violet-kafka-connect >/dev/null
-
-    log_info "Waiting 30s for Kafka Connect to reload plugins..."
-    sleep 30
-    log_success "Kafka Connect restarted with connector synced."
-}
-
 show_access_info() {
     echo ""
     log_success "Violet stack is ready."
     echo ""
     echo "Redis: localhost:6379"
     echo "Kvrocks: localhost:6666"
-    echo "Kafka (internal): localhost:9092"
-    echo "Kafka (external): localhost:9094"
-    echo "Kafka Connect: http://localhost:8083"
+    echo "RocketMQ NameServer: localhost:9876"
+    echo "RocketMQ Broker: localhost:10911"
+    echo "Kafka for same Docker network: kafka:9092"
+    echo "Kafka for remote clients/Spark: 8.130.134.60:9094"
+    echo "Kafka UI: http://localhost:8080"
+    echo "Kafka Connect / Debezium: http://localhost:8083"
     echo "MySQL: localhost:3306 (root/root)"
     echo "Milvus: localhost:19530"
     echo "Nebula Graph: localhost:9669 (root/nebula)"
@@ -242,7 +217,6 @@ main() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         start_services
         wait_for_services
-        sync_kafka_connectors
         show_access_info
     else
         log_info "Services not started. Run manually with:"

@@ -1,0 +1,234 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for Hive Metastore and JuiceFS metadata
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5 --auth-local=md5"
+    ports:
+      - "5432:5432"
+    volumes:
+      - ~/violet/mnt/postgresql/data:/var/lib/postgresql/data
+      - ./.config/postgres:/docker-entrypoint-initdb.d:ro
+    networks:
+      - violet_data_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # JuiceFS mount service using juicedata/mount image with OSS storage
+  juicefs:
+    image: juicedata/mount:ce-v1.2.1
+    container_name: juicefs-mount
+    privileged: true
+    environment:
+      - META_PASSWORD=postgres123
+      - OSS_BUCKET=https://violet-feed-r.oss-cn-beijing.aliyuncs.com
+      - OSS_ACCESS_KEY=  # Fill in your OSS access key
+      - OSS_SECRET_KEY=  # Fill in your OSS secret key
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+      - ./.config/juicefs/entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      - violet_data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh /entrypoint.sh
+    healthcheck:
+      test: ["CMD-SHELL", "stat /mnt/.config || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Hive Metastore
+  hive-metastore:
+    image: apache/hive:3.1.3
+    container_name: hive-metastore
+    user: root
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive123
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_CLASSPATH: /opt/hive/lib/juicefs-hadoop-1.2.1.jar
+    ports:
+      - "9083:9083"
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+      - ./.config/hive/download-hive-libs.sh:/opt/hive/download-hive-libs.sh:ro
+      - ./.config/hive/entry-metastore.sh:/opt/hive/entry-metastore.sh:ro
+      - ./.config/hive/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+    networks:
+      - violet_data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      juicefs:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/opt/hive/entry-metastore.sh"]
+    restart: unless-stopped
+
+  # HiveServer2
+  hiveserver2:
+    image: apache/hive:3.1.3
+    container_name: hiveserver2
+    user: root
+    environment:
+      SERVICE_NAME: hiveserver2
+      IS_RESUME: "true"
+      SERVICE_OPTS: >-
+        -Dhive.metastore.uris=thrift://hive-metastore:9083
+        -Dhive.server2.thrift.bind.host=0.0.0.0
+        -Dhive.server2.thrift.port=10000
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_CLASSPATH: /opt/hive/lib/juicefs-hadoop-1.2.1.jar
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+      - ./.config/hive/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+      - ./.config/hive/download-hive-libs.sh:/opt/hive/download-hive-libs.sh:ro
+      - ./.config/hive/entry-hiveserver2.sh:/opt/hive/entry-hiveserver2.sh:ro
+      - ./.config/hive/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+    networks:
+      - violet_data_net
+    depends_on:
+      - hive-metastore
+      - spark
+    entrypoint: ["/bin/bash", "/opt/hive/entry-hiveserver2.sh"]
+    restart: unless-stopped
+
+  # Spark Standalone (Master + Worker in one container)
+  spark:
+    image: apache/spark:3.5.7-scala2.12-java11-python3-ubuntu
+    container_name: spark-standalone
+    hostname: spark
+    user: root
+    environment:
+      - SPARK_MODE=standalone
+      - SPARK_MASTER_HOST=spark
+      - SPARK_WORKER_CORES=4
+      - SPARK_WORKER_MEMORY=4g
+      - SPARK_HISTORY_OPTS=-Dspark.history.fs.logDirectory=/tmp/spark-events
+      - GIT_REPO_URL=https://github.com/Violet-Feed/swing.git
+      - GIT_REPO_BRANCH=main
+    ports:
+      - "7077:7077"     # Spark Master port
+      - "8080:8080"     # Spark Master WebUI
+      - "8081:8081"     # Spark Worker WebUI
+      - "4040:4040"     # Spark Application UI
+      - "18080:18080"   # Spark History Server
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+      - ~/violet/mnt/spark/spark-data:/opt/spark-data
+      - ~/violet/mnt/spark/spark-events:/tmp/spark-events
+      - ~/violet/mnt/spark/spark-home:/home/spark
+      - ./.config/spark/download-spark-libs.sh:/opt/spark/download-spark-libs.sh:ro
+      - ./.config/spark/entry-spark.sh:/opt/spark/entry-spark.sh:ro
+      - ./.config/hive/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./.config/spark/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+    networks:
+      - violet_data_net
+    depends_on:
+      juicefs:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_started
+    command: ["/bin/bash", "/opt/spark/entry-spark.sh"]
+    restart: unless-stopped
+
+  jobmanager:
+    image: flink:2.1.1-java21
+    container_name: flink-jobmanager
+    hostname: jobmanager
+    ports:
+      - "8082:8081"
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        state.backend.type: rocksdb
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+    networks:
+      - violet_data_net
+    restart: unless-stopped
+
+  taskmanager:
+    image: flink:2.1.1-java21
+    container_name: flink-taskmanager
+    hostname: taskmanager
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        state.backend.type: rocksdb
+    volumes:
+      - ~/violet/mnt/juicefs-mount:/mnt
+    networks:
+      - violet_data_net
+    restart: unless-stopped
+
+  # Airflow - Workflow Scheduler (Standalone: scheduler + webserver + worker)
+  airflow:
+    image: apache/airflow:2.10.4
+    container_name: airflow
+    user: root
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Shanghai
+      AIRFLOW__WEBSERVER__WEB_SERVER_PORT: "8083"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
+      AIRFLOW__CORE__DEFAULT_TASK_RETRY_DELAY: "300"
+      AIRFLOW__CORE__MAX_TASK_RETRY_DELAY: "1800"
+      AIRFLOW__CORE__PARALLELISM: "8"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      AIRFLOW__CORE__DAG_RUN_TIMEOUT: "14400"
+      AIRFLOW__CORE__KILLED_TASK_CLEANUP_TIME: "60"
+      AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+      DOCKER_HOST: unix:///var/run/docker.sock
+      GIT_REPO_URL: https://github.com/Violet-Feed/swing.git
+      GIT_REPO_BRANCH: main
+    ports:
+      - "8083:8083"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/violet/mnt/airflow/logs:/opt/airflow/logs
+      - ./.config/airflow/entrypoint.sh:/entrypoint-custom.sh:ro
+    networks:
+      - violet_data_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
+    restart: unless-stopped
+
+networks:
+  violet_data_net:
+    driver: bridge

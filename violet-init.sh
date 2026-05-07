@@ -33,3 +33,10 @@ echo "Milvus collections created."
 bash "$SCRIPT_DIR/debezium/debezium.sh"
 
 echo "Debezium connectors configured."
+
+# rocketmq
+# docker exec -it feed-rmq-namesrv sh mqadmin topicList -n rmq-namesrv:9876
+docker exec -it violet-rmq-namesrv sh mqadmin updateTopic -n rmq-namesrv:9876 -t im_conv -c DefaultCluster
+docker exec -it violet-rmq-namesrv sh mqadmin updateTopic -n rmq-namesrv:9876 -t im_user -c DefaultCluster
+
+echo "RocketMQ topics created."

@@ -50,26 +50,4 @@ sleep 5
 echo "Checking MySQL source connector status..."
 curl -s http://localhost:8083/connectors/mysql-source/status | pretty_print
 
-# Create Milvus sink connector
-echo "Creating Milvus sink connector..."
-curl -X POST http://localhost:8083/connectors \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "name": "milvus-sink-user",
-  "config": {
-    "connector.class": "com.milvus.io.kafka.MilvusSinkConnector",
-    "public.endpoint": "http://milvus:19530",
-    "token": "root:Milvus",
-    "collection.name": "user",
-    "topics": "mysql.violet.user"
-  }
-}'
-
-echo -e "\n\nWaiting 5s..."
-sleep 5
-
-# Check Milvus sink status
-echo "Checking Milvus sink connector status..."
-curl -s http://localhost:8083/connectors/milvus-sink-user/status | pretty_print
-
 echo -e "\n\nDone!"

@@ -125,6 +125,7 @@ export schema='{
             {
                 "fieldName": "avatar",
                 "dataType": "VarChar",
+                "nullable": true,
                 "elementTypeParams": {
                     "max_length": 200
                 }

@@ -130,7 +130,7 @@ services:
       - GIT_REPO_BRANCH=main
     ports:
       - "7077:7077"     # Spark Master port
-      - "8080:8080"     # Spark Master WebUI
+      - "8090:8080"     # Spark Master WebUI
       - "8081:8081"     # Spark Worker WebUI
       - "4040:4040"     # Spark Application UI
       - "18080:18080"   # Spark History Server
@@ -157,16 +157,22 @@ services:
     image: flink:2.1.1-java21
     container_name: flink-jobmanager
     hostname: jobmanager
+    user: root
     ports:
       - "8082:8081"
-    command: jobmanager
     environment:
+      GIT_REPO_URL: https://github.com/Violet-Feed/trend.git
+      GIT_REPO_BRANCH: main
+      FLINK_MAIN_CLASS: "violet.trending.flink.JobMain"
+      FLINK_SUBMIT_INTERVAL: "300"
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 2
         state.backend.type: rocksdb
     volumes:
       - ~/violet/mnt/juicefs-mount:/mnt
+      - ./.config/flink/entry-jobmanager.sh:/opt/flink/custom-entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/opt/flink/custom-entrypoint.sh"]
     networks:
       - violet_data_net
     restart: unless-stopped
@@ -216,7 +222,7 @@ services:
       GIT_REPO_URL: https://github.com/Violet-Feed/swing.git
       GIT_REPO_BRANCH: main
     ports:
-      - "8083:8083"
+      - "8084:8083"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ~/violet/mnt/airflow/logs:/opt/airflow/logs

@@ -1,0 +1,43 @@
+grpc:
+  server:
+    port: 3003
+  client:
+    im:
+      address: 'static://im:3004'
+      negotiation-type: plaintext
+    aigc:
+      address: 'static://aigc:3005'
+      negotiation-type: plaintext
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    url: jdbc:mysql://mysql:3306/violet?serverTimezone=GMT%2B8&useUnicode=true&characterEncoding=UTF-8
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: root
+  kafka:
+    bootstrap-servers: kafka:9092
+    producer:
+      retries: 2
+      batch-size: 16384
+      buffer-memory: 16777216
+    consumer:
+      group-id: action_consumer
+      auto-offset-reset: earliest
+  redis:
+    host: redis
+    port: 6379
+    password:
+  kvrocks:
+    host: kvrocks
+    port: 6666
+    password:
+nebula:
+  address: graphd
+  port: 9669
+  username: root
+  password: 123456
+milvus:
+  uri: http://milvus:19530
+  token: root:Milvus

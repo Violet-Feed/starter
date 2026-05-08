@@ -273,60 +273,145 @@ show_access_info() {
     echo "HiveServer2 JDBC/Thrift: localhost:10000"
     echo "HiveServer2 Web UI: http://localhost:10002"
     echo "Spark Master: spark://localhost:7077"
-    echo "Spark Master Web UI: http://localhost:8080"
+    echo "Spark Master Web UI: http://localhost:8090"
     echo "Spark Worker Web UI: http://localhost:8081"
     echo "Spark Application UI: http://localhost:4040"
     echo "Spark History Server: http://localhost:18080"
     echo "Flink Web UI: http://localhost:8082"
-    echo "Airflow Web UI: http://localhost:8083"
+    echo "Airflow Web UI: http://localhost:8084"
     echo ""
     echo "Data root:"
     echo "  $DATA_ROOT"
     echo ""
     echo "Useful commands:"
-    echo "  docker compose -f $COMPOSE_FILE ps"
-    echo "  docker compose -f $COMPOSE_FILE logs -f <service>"
-    echo "  docker compose -f $COMPOSE_FILE logs -f airflow"
-    echo "  docker compose -f $COMPOSE_FILE restart <service>"
-    echo "  docker compose -f $COMPOSE_FILE down"
+    echo "  bash $0 redeploy           # Redeploy all data services"
+    echo "  bash $0 redeploy airflow   # Redeploy single service"
+    echo "  bash $0 restart spark      # Restart single service"
+    echo "  bash $0 logs               # Tail all data service logs"
     echo ""
 }
 
+DATA_SERVICES="postgres juicefs hive-metastore hiveserver2 spark jobmanager taskmanager airflow"
+
+stop_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Stopping $2..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2")
+    else
+        log_info "Stopping all data services..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $DATA_SERVICES)
+    fi
+    log_success "Stopped."
+}
+
+restart_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Restarting $2..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart "$2")
+    else
+        log_info "Restarting all data services..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart $DATA_SERVICES)
+    fi
+    log_success "Restarted."
+}
+
+redeploy_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Redeploying $2 (stop -> rm -> up)..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2" && docker compose -f "$COMPOSE_FILE" rm -f "$2" && docker compose -f "$COMPOSE_FILE" up -d "$2")
+    else
+        log_info "Redeploying all data services (stop -> rm -> up)..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $DATA_SERVICES && docker compose -f "$COMPOSE_FILE" rm -f $DATA_SERVICES && docker compose -f "$COMPOSE_FILE" up -d $DATA_SERVICES)
+    fi
+    log_success "Redeployed."
+}
+
+logs_services() {
+    if [ -n "${2:-}" ]; then
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f "$2")
+    else
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f $DATA_SERVICES)
+    fi
+}
+
+show_help() {
+    echo "Usage: $0 <command> [service]"
+    echo ""
+    echo "Commands:"
+    echo "  deploy     First-time deploy: check, pull images, start services"
+    echo "  start      Start all data services"
+    echo "  stop       Stop data services [service]"
+    echo "  restart    Restart data services [service]"
+    echo "  redeploy   Stop, remove, and re-create containers [service]"
+    echo "  logs       Tail logs of data services [service]"
+    echo ""
+    echo "Service names: postgres, juicefs, hive-metastore, hiveserver2, spark,"
+    echo "  jobmanager, taskmanager, airflow"
+    echo "Omit [service] to target all data services."
+}
+
 main() {
-    log_info "Initializing Violet data environment..."
-    echo ""
+    local cmd="${1:-deploy}"
 
-    check_docker
-    create_directories
-    relax_permissions
-    validate_config_files
-    check_airflow_postgres_init
-    check_docker_sock
-    validate_compose_file
-    check_ports
+    case "$cmd" in
+        deploy)
+            log_info "Initializing Violet data environment..."
+            echo ""
+            check_docker
+            create_directories
+            relax_permissions
+            validate_config_files
+            check_airflow_postgres_init
+            check_docker_sock
+            validate_compose_file
+            check_ports
 
-    echo ""
-    read -p "Pull Docker images now? (y/n) " -n 1 -r
-    echo
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        pull_images
-    else
-        log_warning "Skipped image pull. Make sure images exist locally."
-    fi
+            echo ""
+            read -p "Pull Docker images now? (y/n) " -n 1 -r
+            echo
+            if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+                pull_images
+            else
+                log_warning "Skipped image pull. Make sure images exist locally."
+            fi
 
-    echo ""
-    read -p "Start services now? (y/n) " -n 1 -r
-    echo
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        start_services
-        wait_for_services
-        show_access_info
-    else
-        log_info "Services not started. Run manually with:"
-        echo "  cd $SCRIPT_DIR && docker compose -f $COMPOSE_FILE up -d"
-    fi
-
-    log_success "Setup finished."
+            echo ""
+            read -p "Start services now? (y/n) " -n 1 -r
+            echo
+            if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+                start_services
+                wait_for_services
+                show_access_info
+            else
+                log_info "Services not started. Run '$0 start' to start later."
+            fi
+            log_success "Setup finished."
+            ;;
+        start)
+            start_services
+            wait_for_services
+            ;;
+        stop)
+            stop_services "$@"
+            ;;
+        restart)
+            restart_services "$@"
+            ;;
+        redeploy)
+            redeploy_services "$@"
+            ;;
+        logs)
+            logs_services "$@"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            log_error "Unknown command: $cmd"
+            show_help
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

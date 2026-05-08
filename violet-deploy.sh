@@ -158,7 +158,12 @@ start_services() {
         exit 1
     fi
 
-    (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" up -d)
+    (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" up -d \
+        redis kvrocks \
+        rmq-namesrv rmq-broker \
+        kafka kafka-ui connect \
+        mysql milvus \
+        metad0 storaged0 graphd storage-activator nebula-console nebula-studio)
     log_success "Services started."
 }
 
@@ -172,6 +177,7 @@ show_access_info() {
     echo ""
     log_success "Violet stack is ready."
     echo ""
+    echo "--- Infrastructure ---"
     echo "Redis: localhost:6379"
     echo "Kvrocks: localhost:6666"
     echo "RocketMQ NameServer: localhost:9876"
@@ -185,45 +191,139 @@ show_access_info() {
     echo "Nebula Graph: localhost:9669 (root/nebula)"
     echo "Nebula Studio: http://localhost:7001"
     echo ""
+    echo "--- Backend Services ---"
+    echo "Gateway HTTP:  http://localhost:3000"
+    echo "Gateway TCP:   localhost:3001"
+    echo "Gateway gRPC:  localhost:3002"
+    echo "Action gRPC:   localhost:3003"
+    echo "IM gRPC:       localhost:3004"
+    echo "AIGC gRPC:     localhost:3005"
+    echo ""
     echo "Useful commands:"
-    echo "  docker compose -f $COMPOSE_FILE ps"
-    echo "  docker compose -f $COMPOSE_FILE logs -f <service>"
-    echo "  docker compose -f $COMPOSE_FILE down"
-    echo "  docker compose -f $COMPOSE_FILE restart <service>"
+    echo "  bash $0 redeploy           # Redeploy all infrastructure"
+    echo "  bash $0 redeploy mysql     # Redeploy single service"
+    echo "  bash $0 restart kafka      # Restart single service"
+    echo "  bash $0 logs               # Tail all infrastructure logs"
     echo ""
 }
 
+INFRA_SERVICES="redis kvrocks rmq-namesrv rmq-broker kafka kafka-ui connect mysql milvus metad0 storaged0 graphd storage-activator nebula-console nebula-studio"
+
+stop_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Stopping $2..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2")
+    else
+        log_info "Stopping all infrastructure services..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $INFRA_SERVICES)
+    fi
+    log_success "Stopped."
+}
+
+restart_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Restarting $2..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart "$2")
+    else
+        log_info "Restarting all infrastructure services..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart $INFRA_SERVICES)
+    fi
+    log_success "Restarted."
+}
+
+redeploy_services() {
+    if [ -n "${2:-}" ]; then
+        log_info "Redeploying $2 (down -> up)..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2" && docker compose -f "$COMPOSE_FILE" rm -f "$2" && docker compose -f "$COMPOSE_FILE" up -d "$2")
+    else
+        log_info "Redeploying all infrastructure services (down -> up)..."
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $INFRA_SERVICES && docker compose -f "$COMPOSE_FILE" rm -f $INFRA_SERVICES && docker compose -f "$COMPOSE_FILE" up -d $INFRA_SERVICES)
+    fi
+    log_success "Redeployed."
+}
+
+logs_services() {
+    if [ -n "${2:-}" ]; then
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f "$2")
+    else
+        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f $INFRA_SERVICES)
+    fi
+}
+
+show_help() {
+    echo "Usage: $0 <command> [service]"
+    echo ""
+    echo "Commands:"
+    echo "  deploy     First-time deploy: check, pull images, start infrastructure"
+    echo "  start      Start infrastructure services"
+    echo "  stop        Stop infrastructure services [service]"
+    echo "  restart    Restart infrastructure services [service]"
+    echo "  redeploy   Stop, remove, and re-create containers (down -> up) [service]"
+    echo "  logs        Tail logs of infrastructure services [service]"
+    echo ""
+    echo "Service names: redis, kvrocks, rmq-namesrv, rmq-broker, kafka, kafka-ui,"
+    echo "  connect, mysql, milvus, metad0, storaged0, graphd, nebula-studio, etc."
+    echo "Omit [service] to target all infrastructure services."
+}
+
 main() {
-    log_info "Initializing Violet environment..."
-    echo ""
+    local cmd="${1:-deploy}"
 
-    check_docker
-    create_directories
-    relax_permissions
-    validate_config_files
-    copy_kvrocks_config
+    case "$cmd" in
+        deploy)
+            log_info "Initializing Violet environment..."
+            echo ""
+            check_docker
+            create_directories
+            relax_permissions
+            validate_config_files
+            copy_kvrocks_config
 
-    read -p "Pull Docker images now? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        pull_images
-    else
-        log_warning "Skipped image pull. Make sure images exist locally."
-    fi
+            read -p "Pull Docker images now? (y/n) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                pull_images
+            else
+                log_warning "Skipped image pull. Make sure images exist locally."
+            fi
 
-    echo ""
-    read -p "Start services now? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        start_services
-        wait_for_services
-        show_access_info
-    else
-        log_info "Services not started. Run manually with:"
-        echo "  cd $SCRIPT_DIR && docker compose -f $COMPOSE_FILE up -d"
-    fi
-
-    log_success "Setup finished."
+            echo ""
+            read -p "Start services now? (y/n) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                start_services
+                wait_for_services
+                show_access_info
+            else
+                log_info "Services not started. Run '$0 start' to start later."
+            fi
+            log_success "Setup finished."
+            ;;
+        start)
+            start_services
+            wait_for_services
+            ;;
+        stop)
+            stop_services "$@"
+            ;;
+        restart)
+            restart_services "$@"
+            ;;
+        redeploy)
+            redeploy_services "$@"
+            ;;
+        logs)
+            logs_services "$@"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            log_error "Unknown command: $cmd"
+            show_help
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

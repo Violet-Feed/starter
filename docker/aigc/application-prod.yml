@@ -1,0 +1,47 @@
+grpc:
+  server:
+    port: 3005
+  client:
+    push:
+      address: 'static://gateway:3002'
+      negotiation-type: plaintext
+    action:
+      address: 'static://action:3003'
+      negotiation-type: plaintext
+    im:
+      address: 'static://im:3004'
+      negotiation-type: plaintext
+spring:
+  datasource:
+    url: jdbc:mysql://mysql:3306/violet?serverTimezone=GMT%2B8&useUnicode=true&characterEncoding=UTF-8
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: root
+  kafka:
+    bootstrap-servers: kafka:9092
+    consumer:
+      group-id: aigc_consumer
+      auto-offset-reset: earliest
+  redis:
+    host: kvrocks
+    port: 6666
+    password:
+nebula:
+  address: graphd
+  port: 9669
+  username: root
+  password: 123456
+milvus:
+  uri: http://milvus:19530
+  token: root:Milvus
+aliyun:
+  oss:
+    endpoint: https://oss-cn-beijing.aliyuncs.com
+    region: cn-beijing
+    bucket-name: violet-feed
+    access-key-id: xxx
+    access-key-secret: xxx
+  dashscope:
+    api-key: xxx
+minimax:
+  api-key: xxx

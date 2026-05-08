@@ -389,3 +389,117 @@ services:
     depends_on:
       - graphd
     restart: on-failure
+
+  gateway:
+    build:
+      context: ./repos/gateway
+      dockerfile: Dockerfile
+    container_name: violet-gateway
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3002:3002"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    volumes:
+      - ./docker/gateway/application-prod.yml:/app/config/application-prod.yml:ro
+    networks: [violet_net]
+    restart: unless-stopped
+
+  action:
+    build:
+      context: ./repos/action
+      dockerfile: Dockerfile
+    container_name: violet-action
+    ports:
+      - "3003:3003"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    volumes:
+      - ./docker/action/application-prod.yml:/app/config/application-prod.yml:ro
+    networks: [violet_net]
+    depends_on:
+      gateway:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kvrocks:
+        condition: service_healthy
+      graphd:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  aigc:
+    build:
+      context: ./repos/aigc
+      dockerfile: Dockerfile
+    container_name: violet-aigc
+    ports:
+      - "3005:3005"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    volumes:
+      - ./docker/aigc/application-prod.yml:/app/config/application-prod.yml:ro
+    networks: [violet_net]
+    depends_on:
+      gateway:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      kvrocks:
+        condition: service_healthy
+      graphd:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  im:
+    build:
+      context: ./repos/im
+      dockerfile: Dockerfile
+    container_name: violet-im
+    ports:
+      - "3004:3004"
+    volumes:
+      - ./docker/im/config-prod.yaml:/app/config.yaml:ro
+    networks: [violet_net]
+    depends_on:
+      gateway:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kvrocks:
+        condition: service_healthy
+      rmq-broker:
+        condition: service_healthy
+    restart: unless-stopped
+
+  chatbot:
+    build:
+      context: ./repos/chatbot
+      dockerfile: Dockerfile
+    container_name: violet-chatbot
+    volumes:
+      - ./docker/chatbot/.env:/app/.env:ro
+    networks: [violet_net]
+    depends_on:
+      gateway:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rmq-broker:
+        condition: service_healthy
+    restart: unless-stopped

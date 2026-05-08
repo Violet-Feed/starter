@@ -1,0 +1,22 @@
+server:
+  port: 3000
+grpc:
+  server:
+    port: 3002
+  client:
+    action:
+      address: 'static://action:3003'
+      negotiation-type: plaintext
+    im:
+      address: 'static://im:3004'
+      negotiation-type: plaintext
+    aigc:
+      address: 'static://aigc:3005'
+      negotiation-type: plaintext
+aliyun:
+  oss:
+    endpoint: https://oss-cn-beijing.aliyuncs.com
+    region: cn-beijing
+    bucket-name: violet-feed
+    access-key-id: xxx
+    access-key-secret: xxx

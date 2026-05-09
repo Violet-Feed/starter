@@ -60,6 +60,7 @@ bash violet-data-deploy.sh deploy
 bash violet-init.sh
 
 # 4. 部署后端服务
+# 补充配置文件中key
 bash violet-setup.sh all
 ```
 

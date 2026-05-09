@@ -2,7 +2,7 @@
 version: "3.8"
 
 networks:
-  violet_net:
+  violet-net:
     driver: bridge
 
 services:
@@ -15,7 +15,7 @@ services:
       - "6379:6379"
     volumes:
       - ~/violet/mnt/redis/data:/data
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -30,7 +30,7 @@ services:
       - "6666:6666"
     volumes:
       - ~/violet/mnt/kvrocks:/var/lib/kvrocks
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -h 127.0.0.1 -p 6666 ping | grep PONG || exit 1"]
       interval: 10s
@@ -43,12 +43,12 @@ services:
     command: sh mqnamesrv
     ports:
       - "9876:9876"
-    networks: [ violet_net ]
+    networks: [ violet-net ]
     healthcheck:
-      test: [ "CMD-SHELL", "ps | grep -q NamesrvStartup || exit 1" ]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9876' >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   rmq-broker:
     image: apache/rocketmq:5.2.0
@@ -64,9 +64,9 @@ services:
       - ./rocketmq/broker.conf:/home/rocketmq/rocketmq-5.2.0/conf/broker.conf:ro
       - ~/violet/mnt/rocketmq/store:/home/rocketmq/store
       - ~/violet/mnt/rocketmq/logs:/home/rocketmq/logs
-    networks: [ violet_net ]
+    networks: [ violet-net ]
     healthcheck:
-      test: [ "CMD-SHELL", "ps | grep -q BrokerStartup || exit 1" ]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/10911' >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -99,9 +99,9 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
       - ~/violet/mnt/kafka/data:/var/lib/kafka/data
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server kafka:9092 || exit 1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -117,10 +117,10 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     networks:
-      - violet_net
+      - violet-net
     depends_on:
       - kafka
-    restart: unless-stopped
+    restart: "no"
 
   # Kafka Connect
   connect:
@@ -144,7 +144,7 @@ services:
       - CONNECT_REST_ADVERTISED_HOST_NAME=connect
       - CONNECT_LOG4J_LOGGERS=org.reflections=ERROR
       - PLUGIN_PATH=/kafka/connectors
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors || exit 1"]
       interval: 15s
@@ -175,7 +175,7 @@ services:
     volumes:
       - ~/violet/mnt/mysql/data:/var/lib/mysql
       - ./mysql/mysql.sql:/violet/mysql.sql:ro
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -proot || exit 1"]
       interval: 10s
@@ -203,7 +203,7 @@ services:
       - ~/violet/mnt/milvus/data:/var/lib/milvus
       - ./milvus/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
       - ./milvus/user.yaml:/milvus/configs/user.yaml:ro
-    networks: [violet_net]
+    networks: [violet-net]
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9091/healthz || exit 1"]
       interval: 30s
@@ -241,7 +241,7 @@ services:
       - ~/violet/mnt/nebula/data/meta0:/data/meta
       - ~/violet/mnt/nebula/logs/meta0:/logs
     networks:
-      - violet_net
+      - violet-net
     restart: on-failure
     cap_add:
       - SYS_PTRACE
@@ -279,7 +279,7 @@ services:
       - ~/violet/mnt/nebula/data/storage0:/data/storage
       - ~/violet/mnt/nebula/logs/storage0:/logs
     networks:
-      - violet_net
+      - violet-net
     restart: on-failure
     cap_add:
       - SYS_PTRACE
@@ -315,7 +315,7 @@ services:
     volumes:
       - ~/violet/mnt/nebula/logs/graph:/logs
     networks:
-      - violet_net
+      - violet-net
     restart: on-failure
     cap_add:
       - SYS_PTRACE
@@ -361,7 +361,7 @@ services:
     depends_on:
       - graphd
     networks:
-      - violet_net
+      - violet-net
 
   nebula-console:
     image: docker.io/vesoft/nebula-console:v3.8.0
@@ -373,7 +373,7 @@ services:
     depends_on:
       - graphd
     networks:
-      - violet_net
+      - violet-net
     restart: on-failure
 
   # Nebula Graph Studio - Web UI
@@ -385,7 +385,7 @@ services:
     ports:
       - 7001:7001
     networks:
-      - violet_net
+      - violet-net
     depends_on:
       - graphd
     restart: on-failure
@@ -403,8 +403,8 @@ services:
       - SPRING_PROFILES_ACTIVE=prod
     volumes:
       - ./docker/gateway/application-prod.yml:/app/config/application-prod.yml:ro
-    networks: [violet_net]
-    restart: unless-stopped
+    networks: [violet-net]
+    restart: "no"
 
   action:
     build:
@@ -417,7 +417,7 @@ services:
       - SPRING_PROFILES_ACTIVE=prod
     volumes:
       - ./docker/action/application-prod.yml:/app/config/application-prod.yml:ro
-    networks: [violet_net]
+    networks: [violet-net]
     depends_on:
       gateway:
         condition: service_started
@@ -433,7 +433,7 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   aigc:
     build:
@@ -446,7 +446,7 @@ services:
       - SPRING_PROFILES_ACTIVE=prod
     volumes:
       - ./docker/aigc/application-prod.yml:/app/config/application-prod.yml:ro
-    networks: [violet_net]
+    networks: [violet-net]
     depends_on:
       gateway:
         condition: service_started
@@ -460,7 +460,7 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   im:
     build:
@@ -471,7 +471,7 @@ services:
       - "3004:3004"
     volumes:
       - ./docker/im/config-prod.yaml:/app/config.yaml:ro
-    networks: [violet_net]
+    networks: [violet-net]
     depends_on:
       gateway:
         condition: service_started
@@ -483,7 +483,7 @@ services:
         condition: service_healthy
       rmq-broker:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   chatbot:
     build:
@@ -492,7 +492,7 @@ services:
     container_name: violet-chatbot
     volumes:
       - ./docker/chatbot/.env:/app/.env:ro
-    networks: [violet_net]
+    networks: [violet-net]
     depends_on:
       gateway:
         condition: service_started
@@ -502,4 +502,4 @@ services:
         condition: service_healthy
       rmq-broker:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"

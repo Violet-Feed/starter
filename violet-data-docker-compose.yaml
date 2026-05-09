@@ -16,7 +16,7 @@ services:
       - ~/violet/mnt/postgresql/data:/var/lib/postgresql/data
       - ./.config/postgres:/docker-entrypoint-initdb.d:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -38,7 +38,7 @@ services:
       - ~/violet/mnt/juicefs-mount:/mnt
       - ./.config/juicefs/entrypoint.sh:/entrypoint.sh:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,7 +74,7 @@ services:
       - ./.config/hive/entry-metastore.sh:/opt/hive/entry-metastore.sh:ro
       - ./.config/hive/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,7 +107,7 @@ services:
       - ./.config/hive/entry-hiveserver2.sh:/opt/hive/entry-hiveserver2.sh:ro
       - ./.config/hive/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     depends_on:
       - hive-metastore
       - spark
@@ -144,7 +144,7 @@ services:
       - ./.config/hive/core-site.xml:/opt/spark/conf/core-site.xml:ro
       - ./.config/spark/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     depends_on:
       juicefs:
         condition: service_healthy
@@ -174,7 +174,7 @@ services:
       - ./.config/flink/entry-jobmanager.sh:/opt/flink/custom-entrypoint.sh:ro
     entrypoint: ["/bin/bash", "/opt/flink/custom-entrypoint.sh"]
     networks:
-      - violet_data_net
+      - violet-data-net
     restart: unless-stopped
 
   taskmanager:
@@ -192,7 +192,7 @@ services:
     volumes:
       - ~/violet/mnt/juicefs-mount:/mnt
     networks:
-      - violet_data_net
+      - violet-data-net
     restart: unless-stopped
 
   # Airflow - Workflow Scheduler (Standalone: scheduler + webserver + worker)
@@ -228,7 +228,7 @@ services:
       - ~/violet/mnt/airflow/logs:/opt/airflow/logs
       - ./.config/airflow/entrypoint.sh:/entrypoint-custom.sh:ro
     networks:
-      - violet_data_net
+      - violet-data-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -236,5 +236,5 @@ services:
     restart: unless-stopped
 
 networks:
-  violet_data_net:
+  violet-data-net:
     driver: bridge

@@ -1,17 +1,37 @@
-FROM maven:3.8-openjdk-8-slim AS build
+FROM maven:3.8.8-eclipse-temurin-8 AS build
+
+RUN mkdir -p /usr/share/maven/conf && \
+    cat > /usr/share/maven/conf/settings.xml <<'EOF'
+<settings>
+  <mirrors>
+    <mirror>
+      <id>aliyunmaven</id>
+      <mirrorOf>*</mirrorOf>
+      <name>Aliyun Maven</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+    </mirror>
+  </mirrors>
+</settings>
+EOF
+
 WORKDIR /build
 COPY pom.xml .
-RUN mvn dependency:go-offline -B
+
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn dependency:go-offline -B -Dmaven.repo.local=/root/.m2/repository
+
 COPY src ./src
-RUN mvn package -DskipTests -B && \
+
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn package -DskipTests -B -Dmaven.repo.local=/root/.m2/repository && \
     JAR=$(ls target/*.jar | grep -v original | head -1) && \
     cp "$JAR" app.jar
 
-FROM openjdk:8-jre-slim
+FROM amazoncorretto:8-al2023-jre
+
 WORKDIR /app
 RUN mkdir -p /app/config
 COPY --from=build /build/app.jar app.jar
 
 EXPOSE 3000 3001 3002
-
 ENTRYPOINT ["java", "-jar", "app.jar"]

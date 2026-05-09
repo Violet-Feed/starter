@@ -12,6 +12,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/violet-docker-compose.yaml"
 DATA_ROOT="$HOME/violet/mnt"
 
+CORE_SERVICES=(
+    redis
+    kvrocks
+    rmq-namesrv
+    rmq-broker
+    kafka
+    connect
+    mysql
+    milvus
+    metad0
+    storaged0
+    graphd
+    storage-activator
+)
+
+OPTIONAL_SERVICES=(
+    kafka-ui
+    nebula-console
+    nebula-studio
+)
+
+ALL_SERVICES=(
+    "${CORE_SERVICES[@]}"
+    "${OPTIONAL_SERVICES[@]}"
+)
+
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -44,8 +70,56 @@ check_docker() {
     log_success "Docker check passed."
 }
 
+check_compose_file() {
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        log_error "Cannot find compose file: $COMPOSE_FILE"
+        exit 1
+    fi
+}
+
+target_label() {
+    local target="${1:-default}"
+
+    case "$target" in
+        ""|"default"|"core")
+            echo "core services"
+            ;;
+        "all")
+            echo "all services"
+            ;;
+        *)
+            echo "service: $target"
+            ;;
+    esac
+}
+
+services_for_target() {
+    local target="${1:-default}"
+
+    case "$target" in
+        ""|"default"|"core")
+            printf '%s\n' "${CORE_SERVICES[@]}"
+            ;;
+        "all")
+            printf '%s\n' "${ALL_SERVICES[@]}"
+            ;;
+        *)
+            printf '%s\n' "$target"
+            ;;
+    esac
+}
+
+ask_yes_no() {
+    local prompt="$1"
+
+    read -p "$prompt (y/n) " -n 1 -r
+    echo
+
+    [[ "${REPLY:-}" =~ ^[Yy]$ ]]
+}
+
 create_directories() {
-    log_info "Creating data directories (matching docker-compose mounts)..."
+    log_info "Creating data directories..."
 
     directories=(
         "$DATA_ROOT/redis/data"
@@ -73,13 +147,16 @@ create_directories() {
 }
 
 relax_permissions() {
-    log_info "Setting permissive permissions for data directories (777)..."
+    log_info "Setting permissive permissions for data directories..."
+
+    mkdir -p "$DATA_ROOT"
     chmod -R 777 "$DATA_ROOT"
+
     log_success "Permissions updated: $DATA_ROOT"
 }
 
 validate_config_files() {
-    log_info "Validating config files (used directly or required by deployment)..."
+    log_info "Validating config files..."
 
     required_files=(
         "$SCRIPT_DIR/rocketmq/broker.conf"
@@ -91,6 +168,7 @@ validate_config_files() {
     )
 
     missing=0
+
     for file in "${required_files[@]}"; do
         if [ ! -f "$file" ]; then
             log_error "Missing: $file"
@@ -112,14 +190,37 @@ copy_kvrocks_config() {
     log_info "Syncing kvrocks.conf to $DATA_ROOT/kvrocks ..."
 
     local src="$SCRIPT_DIR/kvrocks/kvrocks.conf"
-    local dest="$DATA_ROOT/kvrocks/kvrocks.conf"
+    local dest_dir="$DATA_ROOT/kvrocks"
+    local dest="$dest_dir/kvrocks.conf"
+
+    if [ ! -f "$src" ]; then
+        log_error "Missing kvrocks config: $src"
+        exit 1
+    fi
+
+    mkdir -p "$dest_dir"
 
     cp "$src" "$dest"
+
+    chmod 777 "$dest_dir"
+    chmod 666 "$dest"
+
     log_success "kvrocks.conf copied to $dest"
 }
 
+prepare_runtime_layout() {
+    log_info "Preparing runtime directories, config files and permissions..."
+
+    create_directories
+    validate_config_files
+    copy_kvrocks_config
+    relax_permissions
+
+    log_success "Runtime layout is ready."
+}
+
 pull_images() {
-    log_info "Pulling Docker images (may take a while)..."
+    log_info "Pulling Docker images..."
 
     images=(
         "redis:5.0.14"
@@ -150,27 +251,179 @@ pull_images() {
     log_success "All images pulled."
 }
 
-start_services() {
-    log_info "Starting Violet services..."
+compose_up_target() {
+    local target="${1:-default}"
+    local services=()
 
-    if [ ! -f "$COMPOSE_FILE" ]; then
-        log_error "Cannot find compose file: $COMPOSE_FILE"
-        exit 1
+    mapfile -t services < <(services_for_target "$target")
+
+    log_info "Starting $(target_label "$target")..."
+    log_info "Services: ${services[*]}"
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" up -d "${services[@]}"
+    )
+
+    log_success "Started."
+}
+
+compose_restart_target() {
+    local target="${1:-default}"
+    local services=()
+
+    mapfile -t services < <(services_for_target "$target")
+
+    log_info "Restarting $(target_label "$target")..."
+    log_info "Services: ${services[*]}"
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" restart "${services[@]}"
+    )
+
+    log_success "Restarted."
+}
+
+compose_redeploy_target() {
+    local target="${1:-default}"
+    local services=()
+
+    mapfile -t services < <(services_for_target "$target")
+
+    log_info "Redeploying $(target_label "$target")..."
+    log_info "Services: ${services[*]}"
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" stop "${services[@]}" || true
+        docker compose -f "$COMPOSE_FILE" rm -f "${services[@]}"
+        docker compose -f "$COMPOSE_FILE" up -d "${services[@]}"
+    )
+
+    log_success "Redeployed."
+}
+
+compose_stop_target() {
+    local target="${1:-default}"
+    local services=()
+
+    mapfile -t services < <(services_for_target "$target")
+
+    log_info "Stopping $(target_label "$target")..."
+    log_info "Services: ${services[*]}"
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" stop "${services[@]}"
+    )
+
+    log_success "Stopped."
+}
+
+compose_logs_target() {
+    local target="${1:-default}"
+    local services=()
+
+    mapfile -t services < <(services_for_target "$target")
+
+    log_info "Tailing logs for $(target_label "$target")..."
+    log_info "Services: ${services[*]}"
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" logs -f "${services[@]}"
+    )
+}
+
+deploy_services() {
+    local target="${2:-default}"
+
+    log_info "Initializing Violet environment for $(target_label "$target")..."
+    echo ""
+
+    check_docker
+    check_compose_file
+    prepare_runtime_layout
+
+    if ask_yes_no "Pull Docker images now?"; then
+        pull_images
+    else
+        log_warning "Skipped image pull. Make sure images exist locally."
     fi
 
-    (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" up -d \
-        redis kvrocks \
-        rmq-namesrv rmq-broker \
-        kafka kafka-ui connect \
-        mysql milvus \
-        metad0 storaged0 graphd storage-activator nebula-console nebula-studio)
-    log_success "Services started."
+    echo ""
+
+    if ask_yes_no "Start $(target_label "$target") now?"; then
+        compose_up_target "$target"
+        wait_for_services
+        show_access_info
+    else
+        log_info "Services not started. Run one of these later:"
+        echo "  bash $0 start"
+        echo "  bash $0 start all"
+        echo "  bash $0 start kafka-ui"
+    fi
+
+    log_success "Setup finished."
+}
+
+start_services() {
+    local target="${2:-default}"
+
+    check_docker
+    check_compose_file
+    prepare_runtime_layout
+
+    compose_up_target "$target"
+}
+
+restart_services() {
+    local target="${2:-default}"
+
+    check_docker
+    check_compose_file
+    prepare_runtime_layout
+
+    compose_restart_target "$target"
+}
+
+redeploy_services() {
+    local target="${2:-default}"
+
+    check_docker
+    check_compose_file
+    prepare_runtime_layout
+
+    compose_redeploy_target "$target"
+}
+
+stop_services() {
+    local target="${2:-default}"
+
+    check_docker
+    check_compose_file
+
+    compose_stop_target "$target"
+}
+
+logs_services() {
+    local target="${2:-default}"
+
+    check_docker
+    check_compose_file
+
+    compose_logs_target "$target"
 }
 
 wait_for_services() {
     log_info "Waiting 30s for health checks..."
     sleep 30
-    docker compose -f "$COMPOSE_FILE" ps
+
+    (
+        cd "$SCRIPT_DIR"
+        docker compose -f "$COMPOSE_FILE" ps
+    )
 }
 
 show_access_info() {
@@ -199,71 +452,61 @@ show_access_info() {
     echo "IM gRPC:       localhost:3004"
     echo "AIGC gRPC:     localhost:3005"
     echo ""
-    echo "Useful commands:"
-    echo "  bash $0 redeploy           # Redeploy all infrastructure"
-    echo "  bash $0 redeploy mysql     # Redeploy single service"
-    echo "  bash $0 restart kafka      # Restart single service"
-    echo "  bash $0 logs               # Tail all infrastructure logs"
+    echo "--- Service groups ---"
+    echo "Default target: core services"
+    echo "All target: core services + kafka-ui + nebula-console + nebula-studio"
     echo ""
-}
-
-INFRA_SERVICES="redis kvrocks rmq-namesrv rmq-broker kafka kafka-ui connect mysql milvus metad0 storaged0 graphd storage-activator nebula-console nebula-studio"
-
-stop_services() {
-    if [ -n "${2:-}" ]; then
-        log_info "Stopping $2..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2")
-    else
-        log_info "Stopping all infrastructure services..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $INFRA_SERVICES)
-    fi
-    log_success "Stopped."
-}
-
-restart_services() {
-    if [ -n "${2:-}" ]; then
-        log_info "Restarting $2..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart "$2")
-    else
-        log_info "Restarting all infrastructure services..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" restart $INFRA_SERVICES)
-    fi
-    log_success "Restarted."
-}
-
-redeploy_services() {
-    if [ -n "${2:-}" ]; then
-        log_info "Redeploying $2 (down -> up)..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop "$2" && docker compose -f "$COMPOSE_FILE" rm -f "$2" && docker compose -f "$COMPOSE_FILE" up -d "$2")
-    else
-        log_info "Redeploying all infrastructure services (down -> up)..."
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" stop $INFRA_SERVICES && docker compose -f "$COMPOSE_FILE" rm -f $INFRA_SERVICES && docker compose -f "$COMPOSE_FILE" up -d $INFRA_SERVICES)
-    fi
-    log_success "Redeployed."
-}
-
-logs_services() {
-    if [ -n "${2:-}" ]; then
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f "$2")
-    else
-        (cd "$SCRIPT_DIR" && docker compose -f "$COMPOSE_FILE" logs -f $INFRA_SERVICES)
-    fi
+    echo "Useful commands:"
+    echo "  bash $0 deploy              # Prepare env, optionally start core services"
+    echo "  bash $0 deploy all          # Prepare env, optionally start all services"
+    echo "  bash $0 start               # Start core services"
+    echo "  bash $0 start all           # Start all services"
+    echo "  bash $0 start kafka-ui      # Start one optional service"
+    echo "  bash $0 restart             # Restart core services"
+    echo "  bash $0 restart all         # Restart all services"
+    echo "  bash $0 redeploy            # Redeploy core services"
+    echo "  bash $0 redeploy all        # Redeploy all services"
+    echo "  bash $0 logs                # Tail core service logs"
+    echo "  bash $0 logs all            # Tail all service logs"
+    echo ""
 }
 
 show_help() {
-    echo "Usage: $0 <command> [service]"
+    echo "Usage: $0 <command> [target]"
+    echo ""
+    echo "Targets:"
+    echo "  default/core    Core services only"
+    echo "  all             Core services + optional UI services"
+    echo "  <service>       A single compose service, such as kafka-ui or nebula-studio"
+    echo ""
+    echo "Core services:"
+    echo "  ${CORE_SERVICES[*]}"
+    echo ""
+    echo "Optional services:"
+    echo "  ${OPTIONAL_SERVICES[*]}"
     echo ""
     echo "Commands:"
-    echo "  deploy     First-time deploy: check, pull images, start infrastructure"
-    echo "  start      Start infrastructure services"
-    echo "  stop        Stop infrastructure services [service]"
-    echo "  restart    Restart infrastructure services [service]"
-    echo "  redeploy   Stop, remove, and re-create containers (down -> up) [service]"
-    echo "  logs        Tail logs of infrastructure services [service]"
+    echo "  deploy      Prepare runtime layout, optionally pull images, optionally start target"
+    echo "  start       Start target"
+    echo "  stop        Stop target"
+    echo "  restart     Restart target"
+    echo "  redeploy    Stop, remove, and re-create target"
+    echo "  logs        Tail target logs"
+    echo "  help        Show help"
     echo ""
-    echo "Service names: redis, kvrocks, rmq-namesrv, rmq-broker, kafka, kafka-ui,"
-    echo "  connect, mysql, milvus, metad0, storaged0, graphd, nebula-studio, etc."
-    echo "Omit [service] to target all infrastructure services."
+    echo "Examples:"
+    echo "  bash $0 deploy"
+    echo "  bash $0 deploy all"
+    echo "  bash $0 start"
+    echo "  bash $0 start all"
+    echo "  bash $0 start kafka-ui"
+    echo "  bash $0 restart"
+    echo "  bash $0 restart all"
+    echo "  bash $0 redeploy"
+    echo "  bash $0 redeploy all"
+    echo "  bash $0 redeploy kvrocks"
+    echo "  bash $0 logs kafka"
+    echo "  bash $0 logs all"
 }
 
 main() {
@@ -271,36 +514,10 @@ main() {
 
     case "$cmd" in
         deploy)
-            log_info "Initializing Violet environment..."
-            echo ""
-            check_docker
-            create_directories
-            relax_permissions
-            validate_config_files
-            copy_kvrocks_config
-
-            read -p "Pull Docker images now? (y/n) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                pull_images
-            else
-                log_warning "Skipped image pull. Make sure images exist locally."
-            fi
-
-            echo ""
-            read -p "Start services now? (y/n) " -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                start_services
-                wait_for_services
-                show_access_info
-            else
-                log_info "Services not started. Run '$0 start' to start later."
-            fi
-            log_success "Setup finished."
+            deploy_services "$@"
             ;;
         start)
-            start_services
+            start_services "$@"
             wait_for_services
             ;;
         stop)
@@ -308,9 +525,11 @@ main() {
             ;;
         restart)
             restart_services "$@"
+            wait_for_services
             ;;
         redeploy)
             redeploy_services "$@"
+            wait_for_services
             ;;
         logs)
             logs_services "$@"

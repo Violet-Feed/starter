@@ -14,12 +14,17 @@ FLINK_MAIN="${FLINK_MAIN_CLASS:-violet.trending.flink.JobMain}"
 BUILD_TREND_JOB="${BUILD_TREND_JOB:-true}"
 REBUILD_TREND_JOB="${REBUILD_TREND_JOB:-false}"
 
-APT_MIRROR="${APT_MIRROR:-https://mirrors.aliyun.com/debian}"
-APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.aliyun.com/debian-security}"
+UBUNTU_APT_MIRROR="${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu}"
+DEBIAN_APT_MIRROR="${DEBIAN_APT_MIRROR:-https://mirrors.aliyun.com/debian}"
+DEBIAN_SECURITY_APT_MIRROR="${DEBIAN_SECURITY_APT_MIRROR:-https://mirrors.aliyun.com/debian-security}"
 
 MAVEN_MIRROR="${MAVEN_MIRROR:-https://maven.aliyun.com/repository/public}"
-JDK_PACKAGE="${JDK_PACKAGE:-openjdk-17-jdk-headless}"
+
+REQUIRED_JAVA_MAJOR="${REQUIRED_JAVA_MAJOR:-21}"
+JDK_PACKAGE="${JDK_PACKAGE:-openjdk-21-jdk-headless}"
+
 MAVEN_OPTS="${MAVEN_OPTS:--Xmx512m}"
+export MAVEN_OPTS
 
 JOBMANAGER_PID=""
 
@@ -42,19 +47,48 @@ setup_apt_mirror() {
 
     . /etc/os-release
 
-    local codename="${VERSION_CODENAME:-bookworm}"
+    local distro_id="${ID:-}"
+    local codename="${VERSION_CODENAME:-}"
 
-    echo "Using APT mirror: ${APT_MIRROR}"
-    echo "Using APT security mirror: ${APT_SECURITY_MIRROR}"
-    echo "Debian codename: ${codename}"
+    if [ -z "${distro_id}" ] || [ -z "${codename}" ]; then
+        echo "WARNING: cannot detect distro or codename, skip apt mirror setup."
+        return 0
+    fi
 
-    rm -f /etc/apt/sources.list.d/debian.sources || true
+    echo "Detected distro: ${distro_id}"
+    echo "Detected codename: ${codename}"
 
-    cat > /etc/apt/sources.list <<EOF
-deb ${APT_MIRROR} ${codename} main contrib non-free non-free-firmware
-deb ${APT_MIRROR} ${codename}-updates main contrib non-free non-free-firmware
-deb ${APT_SECURITY_MIRROR} ${codename}-security main contrib non-free non-free-firmware
+    rm -f /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/*.list 2>/dev/null || true
+
+    case "${distro_id}" in
+        ubuntu)
+            echo "Using Ubuntu APT mirror: ${UBUNTU_APT_MIRROR}"
+
+            cat > /etc/apt/sources.list <<EOF
+deb ${UBUNTU_APT_MIRROR} ${codename} main restricted universe multiverse
+deb ${UBUNTU_APT_MIRROR} ${codename}-updates main restricted universe multiverse
+deb ${UBUNTU_APT_MIRROR} ${codename}-backports main restricted universe multiverse
+deb ${UBUNTU_APT_MIRROR} ${codename}-security main restricted universe multiverse
 EOF
+            ;;
+
+        debian)
+            echo "Using Debian APT mirror: ${DEBIAN_APT_MIRROR}"
+            echo "Using Debian security mirror: ${DEBIAN_SECURITY_APT_MIRROR}"
+
+            cat > /etc/apt/sources.list <<EOF
+deb ${DEBIAN_APT_MIRROR} ${codename} main contrib non-free non-free-firmware
+deb ${DEBIAN_APT_MIRROR} ${codename}-updates main contrib non-free non-free-firmware
+deb ${DEBIAN_SECURITY_APT_MIRROR} ${codename}-security main contrib non-free non-free-firmware
+EOF
+            ;;
+
+        *)
+            echo "WARNING: unsupported distro ID=${distro_id}, skip apt mirror setup."
+            return 0
+            ;;
+    esac
 }
 
 setup_maven_mirror() {
@@ -76,16 +110,88 @@ setup_maven_mirror() {
 EOF
 }
 
+javac_major_from_bin() {
+    local javac_bin="$1"
+
+    if [ ! -x "${javac_bin}" ]; then
+        echo "0"
+        return 0
+    fi
+
+    local version
+    version="$("${javac_bin}" -version 2>&1 | awk '{print $2}')"
+
+    case "${version}" in
+        1.*)
+            echo "${version}" | cut -d. -f2
+            ;;
+        *)
+            echo "${version}" | cut -d. -f1
+            ;;
+    esac
+}
+
+find_java_home_for_major() {
+    local required="$1"
+    local candidates=()
+
+    candidates+=("/opt/java/openjdk")
+    candidates+=("/usr/lib/jvm/java-${required}-openjdk-amd64")
+    candidates+=("/usr/lib/jvm/java-${required}-openjdk")
+    candidates+=("/usr/lib/jvm/temurin-${required}-jdk-amd64")
+    candidates+=("/usr/lib/jvm/default-java")
+
+    if [ -d /usr/lib/jvm ]; then
+        while IFS= read -r dir; do
+            candidates+=("${dir}")
+        done < <(find /usr/lib/jvm -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -r)
+    fi
+
+    for dir in "${candidates[@]}"; do
+        if [ -x "${dir}/bin/javac" ]; then
+            local major
+            major="$(javac_major_from_bin "${dir}/bin/javac")"
+
+            if [ "${major}" -ge "${required}" ]; then
+                echo "${dir}"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
+select_required_java_home() {
+    local java_home
+
+    if java_home="$(find_java_home_for_major "${REQUIRED_JAVA_MAJOR}")"; then
+        export JAVA_HOME="${java_home}"
+        export PATH="${JAVA_HOME}/bin:${PATH}"
+
+        echo "Selected JAVA_HOME=${JAVA_HOME}"
+        java -version || true
+        javac -version || true
+        return 0
+    fi
+
+    return 1
+}
+
 install_missing_deps() {
     local missing=()
 
-    command -v git >/dev/null 2>&1 || missing+=("git")
-    command -v mvn >/dev/null 2>&1 || missing+=("maven")
-    command -v python3 >/dev/null 2>&1 || missing+=("python3")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
+    command -v python3 >/dev/null 2>&1 || missing+=("python3")
 
-    if ! command -v javac >/dev/null 2>&1; then
-        missing+=("${JDK_PACKAGE}")
+    if [ "${BUILD_TREND_JOB}" = "true" ]; then
+        command -v git >/dev/null 2>&1 || missing+=("git")
+        command -v mvn >/dev/null 2>&1 || missing+=("maven")
+
+        if ! select_required_java_home >/dev/null 2>&1; then
+            echo "Required JDK ${REQUIRED_JAVA_MAJOR} not found. Will try to install ${JDK_PACKAGE}."
+            missing+=("${JDK_PACKAGE}")
+        fi
     fi
 
     if [ "${#missing[@]}" -ne 0 ]; then
@@ -101,24 +207,27 @@ install_missing_deps() {
 
         rm -rf /var/lib/apt/lists/*
     else
-        echo "Required build tools already installed."
+        echo "Required tools already installed."
     fi
 
     setup_maven_mirror
 
-    if command -v javac >/dev/null 2>&1; then
-        JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
-        export JAVA_HOME
-        export PATH="${JAVA_HOME}/bin:${PATH}"
-
-        echo "JAVA_HOME=${JAVA_HOME}"
-        java -version || true
-        javac -version || true
-    else
-        echo "WARNING: javac not found. Maven build may fail if project requires compilation."
+    if [ "${BUILD_TREND_JOB}" = "true" ]; then
+        if ! select_required_java_home; then
+            echo "ERROR: javac for Java ${REQUIRED_JAVA_MAJOR}+ not found."
+            echo "Current javac:"
+            command -v javac || true
+            javac -version || true
+            echo ""
+            echo "The project requires target release ${REQUIRED_JAVA_MAJOR}."
+            echo "Please use a Flink image that contains JDK ${REQUIRED_JAVA_MAJOR}, or install ${JDK_PACKAGE} successfully."
+            exit 1
+        fi
     fi
 
-    mvn -version || true
+    if command -v mvn >/dev/null 2>&1; then
+        mvn -version || true
+    fi
 }
 
 sync_repo() {
@@ -150,11 +259,14 @@ build_trend_job() {
         return 0
     fi
 
-    install_missing_deps
     sync_repo
 
     echo "Building trend..."
     cd "${REPO_DIR}"
+
+    echo "Build Java version:"
+    java -version || true
+    javac -version || true
 
     mvn -B -q \
         -s /root/.m2/settings.xml \
@@ -291,6 +403,7 @@ submit_and_watch() {
     done
 }
 
+install_missing_deps
 build_trend_job
 
 start_jobmanager

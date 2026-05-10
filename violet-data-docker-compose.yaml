@@ -31,7 +31,7 @@ services:
     privileged: true
     environment:
       - META_PASSWORD=postgres123
-      - OSS_BUCKET=https://violet-feed-r.oss-cn-beijing.aliyuncs.com
+      - OSS_BUCKET=https://violet-data.oss-cn-beijing.aliyuncs.com
       - OSS_ACCESS_KEY=  # Fill in your OSS access key
       - OSS_SECRET_KEY=  # Fill in your OSS secret key
     volumes:
@@ -143,6 +143,7 @@ services:
       - ./.config/spark/entry-spark.sh:/opt/spark/entry-spark.sh:ro
       - ./.config/hive/core-site.xml:/opt/spark/conf/core-site.xml:ro
       - ./.config/spark/hive-site.xml:/opt/spark/conf/hive-site.xml:ro
+      - ./.config/spark/ivysettings.xml:/opt/spark/conf/ivysettings.xml:ro
     networks:
       - violet-data-net
     depends_on:
@@ -237,4 +238,5 @@ services:
 
 networks:
   violet-data-net:
+    name: violet-data-net
     driver: bridge

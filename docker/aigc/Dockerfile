@@ -34,4 +34,5 @@ RUN mkdir -p /app/config
 COPY --from=build /build/app.jar app.jar
 
 EXPOSE 3005
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENV JAVA_OPTS=""
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

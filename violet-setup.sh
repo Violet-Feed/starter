@@ -217,7 +217,7 @@ show_help() {
 }
 
 main() {
-    local cmd="${1:-help}"
+    local cmd="${1:-all}"
     local svc="${2:-}"
 
     case "$cmd" in

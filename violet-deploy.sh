@@ -13,10 +13,8 @@ COMPOSE_FILE="$SCRIPT_DIR/violet-docker-compose.yaml"
 DATA_ROOT="$HOME/violet/mnt"
 
 # Host Nginx integration.
-# Set NGINX_ENABLED=false to skip Nginx management.
-NGINX_ENABLED="${NGINX_ENABLED:-true}"
 NGINX_CONF_SRC="$SCRIPT_DIR/nginx/violet.conf"
-NGINX_CONF_DEST="${NGINX_CONF_DEST:-/etc/nginx/conf.d/violet.conf}"
+NGINX_CONF_DEST="/etc/nginx/conf.d/violet.conf"
 
 CORE_SERVICES=(
     redis
@@ -85,27 +83,46 @@ should_manage_nginx() {
     esac
 }
 
-check_nginx() {
-    if [ "$NGINX_ENABLED" != "true" ]; then
-        log_warning "Nginx management is disabled by NGINX_ENABLED=$NGINX_ENABLED."
+install_nginx() {
+    if command -v nginx >/dev/null 2>&1; then
+        log_info "Nginx is already installed."
         return 0
     fi
 
-    log_info "Checking Nginx environment..."
+    log_info "Nginx is not installed. Installing Nginx..."
 
-    if ! command -v nginx >/dev/null 2>&1; then
-        log_error "Nginx is not installed. Install it first, for example: sudo apt install -y nginx"
+    if command -v apt-get >/dev/null 2>&1; then
+        run_privileged apt-get update
+        run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
+    elif command -v dnf >/dev/null 2>&1; then
+        run_privileged dnf install -y nginx
+    elif command -v yum >/dev/null 2>&1; then
+        run_privileged yum install -y nginx
+    elif command -v apk >/dev/null 2>&1; then
+        run_privileged apk add --no-cache nginx
+    else
+        log_error "Cannot detect a supported package manager. Please install Nginx manually."
+        log_error "Supported package managers: apt-get, dnf, yum, apk."
         exit 1
     fi
+
+    if ! command -v nginx >/dev/null 2>&1; then
+        log_error "Nginx installation finished but nginx command was not found."
+        exit 1
+    fi
+
+    log_success "Nginx installed successfully."
+}
+
+check_nginx() {
+    log_info "Checking Nginx environment..."
+
+    install_nginx
 
     log_success "Nginx check passed."
 }
 
 validate_nginx_config_file() {
-    if [ "$NGINX_ENABLED" != "true" ]; then
-        return 0
-    fi
-
     if [ ! -f "$NGINX_CONF_SRC" ]; then
         log_error "Cannot find Nginx config: $NGINX_CONF_SRC"
         log_error "Please place violet.conf under: $SCRIPT_DIR/nginx/violet.conf"
@@ -117,11 +134,6 @@ validate_nginx_config_file() {
 
 setup_nginx() {
     local target="${1:-default}"
-
-    if [ "$NGINX_ENABLED" != "true" ]; then
-        log_warning "Skipped Nginx setup because NGINX_ENABLED=$NGINX_ENABLED."
-        return 0
-    fi
 
     if ! should_manage_nginx "$target"; then
         log_info "Skipped Nginx setup for $(target_label "$target")."
@@ -600,11 +612,11 @@ show_help() {
     echo "  ${OPTIONAL_SERVICES[*]}"
     echo ""
     echo "Commands:"
-    echo "  deploy      Prepare runtime layout, optionally pull images, optionally start target and Nginx"
-    echo "  start       Start target and Nginx when target is core/all/gateway"
+    echo "  deploy      Prepare runtime layout, optionally pull images, optionally start target and install/start Nginx"
+    echo "  start       Start target and install/start Nginx when target is core/all/gateway"
     echo "  stop        Stop target; Nginx is left running"
-    echo "  restart     Restart target and reload/start Nginx when target is core/all/gateway"
-    echo "  redeploy    Stop, remove, and re-create target; then reload/start Nginx when needed"
+    echo "  restart     Restart target and install/reload/start Nginx when target is core/all/gateway"
+    echo "  redeploy    Stop, remove, and re-create target; then install/reload/start Nginx when needed"
     echo "  logs        Tail target logs"
     echo "  help        Show help"
     echo ""

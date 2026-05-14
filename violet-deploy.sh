@@ -12,6 +12,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/violet-docker-compose.yaml"
 DATA_ROOT="$HOME/violet/mnt"
 
+# Host Nginx integration.
+# Set NGINX_ENABLED=false to skip Nginx management.
+NGINX_ENABLED="${NGINX_ENABLED:-true}"
+NGINX_CONF_SRC="$SCRIPT_DIR/nginx/violet.conf"
+NGINX_CONF_DEST="${NGINX_CONF_DEST:-/etc/nginx/conf.d/violet.conf}"
+
 CORE_SERVICES=(
     redis
     kvrocks
@@ -52,6 +58,109 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+run_privileged() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        if ! command -v sudo >/dev/null 2>&1; then
+            log_error "sudo is required for this operation. Please install sudo or run this script as root."
+            exit 1
+        fi
+        sudo "$@"
+    fi
+}
+
+should_manage_nginx() {
+    local target="${1:-default}"
+
+    case "$target" in
+        ""|"default"|"core"|"all"|"gateway")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+check_nginx() {
+    if [ "$NGINX_ENABLED" != "true" ]; then
+        log_warning "Nginx management is disabled by NGINX_ENABLED=$NGINX_ENABLED."
+        return 0
+    fi
+
+    log_info "Checking Nginx environment..."
+
+    if ! command -v nginx >/dev/null 2>&1; then
+        log_error "Nginx is not installed. Install it first, for example: sudo apt install -y nginx"
+        exit 1
+    fi
+
+    log_success "Nginx check passed."
+}
+
+validate_nginx_config_file() {
+    if [ "$NGINX_ENABLED" != "true" ]; then
+        return 0
+    fi
+
+    if [ ! -f "$NGINX_CONF_SRC" ]; then
+        log_error "Cannot find Nginx config: $NGINX_CONF_SRC"
+        log_error "Please place violet.conf under: $SCRIPT_DIR/nginx/violet.conf"
+        exit 1
+    fi
+
+    log_info "Found Nginx config: $NGINX_CONF_SRC"
+}
+
+setup_nginx() {
+    local target="${1:-default}"
+
+    if [ "$NGINX_ENABLED" != "true" ]; then
+        log_warning "Skipped Nginx setup because NGINX_ENABLED=$NGINX_ENABLED."
+        return 0
+    fi
+
+    if ! should_manage_nginx "$target"; then
+        log_info "Skipped Nginx setup for $(target_label "$target")."
+        return 0
+    fi
+
+    check_nginx
+    validate_nginx_config_file
+
+    log_info "Installing Nginx config: $NGINX_CONF_SRC -> $NGINX_CONF_DEST"
+
+    run_privileged mkdir -p "$(dirname "$NGINX_CONF_DEST")"
+    run_privileged cp "$NGINX_CONF_SRC" "$NGINX_CONF_DEST"
+    run_privileged chmod 644 "$NGINX_CONF_DEST"
+
+    log_info "Testing Nginx configuration..."
+    run_privileged nginx -t
+
+    if command -v systemctl >/dev/null 2>&1; then
+        run_privileged systemctl enable nginx >/dev/null 2>&1 || true
+
+        if systemctl is-active --quiet nginx; then
+            log_info "Reloading Nginx..."
+            run_privileged systemctl reload nginx
+        else
+            log_info "Starting Nginx..."
+            run_privileged systemctl start nginx
+        fi
+    else
+        if pgrep -x nginx >/dev/null 2>&1; then
+            log_info "Reloading Nginx..."
+            run_privileged nginx -s reload
+        else
+            log_info "Starting Nginx..."
+            run_privileged nginx
+        fi
+    fi
+
+    log_success "Nginx is ready."
 }
 
 check_docker() {
@@ -356,6 +465,7 @@ deploy_services() {
 
     if ask_yes_no "Start $(target_label "$target") now?"; then
         compose_up_target "$target"
+        setup_nginx "$target"
         wait_for_services
         show_access_info
     else
@@ -376,6 +486,7 @@ start_services() {
     prepare_runtime_layout
 
     compose_up_target "$target"
+    setup_nginx "$target"
 }
 
 restart_services() {
@@ -386,6 +497,7 @@ restart_services() {
     prepare_runtime_layout
 
     compose_restart_target "$target"
+    setup_nginx "$target"
 }
 
 redeploy_services() {
@@ -396,6 +508,7 @@ redeploy_services() {
     prepare_runtime_layout
 
     compose_redeploy_target "$target"
+    setup_nginx "$target"
 }
 
 stop_services() {
@@ -446,6 +559,7 @@ show_access_info() {
     echo ""
     echo "--- Backend Services ---"
     echo "Gateway HTTP:  http://localhost:3000"
+    echo "Nginx config:  $NGINX_CONF_SRC -> $NGINX_CONF_DEST"
     echo "Gateway TCP:   localhost:3001"
     echo "Gateway gRPC:  localhost:3002"
     echo "Action gRPC:   localhost:3003"
@@ -486,11 +600,11 @@ show_help() {
     echo "  ${OPTIONAL_SERVICES[*]}"
     echo ""
     echo "Commands:"
-    echo "  deploy      Prepare runtime layout, optionally pull images, optionally start target"
-    echo "  start       Start target"
-    echo "  stop        Stop target"
-    echo "  restart     Restart target"
-    echo "  redeploy    Stop, remove, and re-create target"
+    echo "  deploy      Prepare runtime layout, optionally pull images, optionally start target and Nginx"
+    echo "  start       Start target and Nginx when target is core/all/gateway"
+    echo "  stop        Stop target; Nginx is left running"
+    echo "  restart     Restart target and reload/start Nginx when target is core/all/gateway"
+    echo "  redeploy    Stop, remove, and re-create target; then reload/start Nginx when needed"
     echo "  logs        Tail target logs"
     echo "  help        Show help"
     echo ""

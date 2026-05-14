@@ -30,9 +30,20 @@ RUN --mount=type=cache,target=/root/.m2 \
 FROM amazoncorretto:8-al2023-jre
 
 WORKDIR /app
+
+# 安装 ffmpeg
+RUN dnf install -y spal-release && \
+    dnf install -y ffmpeg-free && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf && \
+    ffmpeg -version
+
 RUN mkdir -p /app/config
+
 COPY --from=build /build/app.jar app.jar
 
 EXPOSE 3005
+
 ENV JAVA_OPTS=""
+
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

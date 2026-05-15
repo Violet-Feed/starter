@@ -56,6 +56,38 @@ init_mysql() {
     fi
 }
 
+# Debezium MySQL permissions
+grant_debezium_mysql_permissions() {
+    log_info "Granting MySQL permissions for Debezium..."
+
+    if ! container_running "violet-mysql"; then
+        log_error "violet-mysql container is not running."
+        exit 1
+    fi
+
+    docker exec -i violet-mysql mysql \
+        -uroot \
+        -proot \
+        --default-character-set=utf8mb4 <<'SQL'
+GRANT SELECT, RELOAD, SHOW DATABASES, LOCK TABLES, REPLICATION SLAVE, REPLICATION CLIENT
+ON *.* TO 'debezium'@'%';
+
+GRANT ALL PRIVILEGES
+ON `violet`.*
+TO 'debezium'@'%';
+
+FLUSH PRIVILEGES;
+SQL
+
+    log_success "Debezium MySQL permissions granted."
+
+    log_info "Current grants for debezium:"
+    docker exec -i violet-mysql mysql \
+        -uroot \
+        -proot \
+        -e "SHOW GRANTS FOR 'debezium'@'%';"
+}
+
 # Nebula initialization
 init_nebula() {
     log_info "Initializing Nebula..."
@@ -127,6 +159,7 @@ init_rocketmq() {
 }
 
 init_mysql
+grant_debezium_mysql_permissions
 init_nebula
 init_milvus
 init_debezium

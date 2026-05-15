@@ -146,6 +146,7 @@ create table violet.material
     cover_url     varchar(200)  not null,
     model         varchar(50)   not null,
     create_time   datetime      not null,
+    modify_time   datetime      not null,
     status        int           not null,
     extra         varchar(200)  null,
     constraint material_id

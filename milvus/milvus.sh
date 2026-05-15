@@ -42,7 +42,17 @@ export schema='{
                     "max_length": 200,
                     "enable_analyzer": true,
                     "enable_match": true,
-                    "analyzer_params": {"type": "chinese"}
+                    "analyzer_params": {
+                        "tokenizer": "jieba",
+                        "filter": [
+                            "cnalphanumonly",
+                            "lowercase",
+                            {
+                                "type": "stemmer",
+                                "language": "english"
+                            }
+                        ]
+                    }
                 }
             },
             {
@@ -115,7 +125,18 @@ export schema='{
                 "elementTypeParams": {
                     "max_length": 200,
                     "enable_analyzer": true,
-                    "enable_match": true
+                    "enable_match": true,
+                    "analyzer_params": {
+                        "tokenizer": "jieba",
+                        "filter": [
+                            "cnalphanumonly",
+                            "lowercase",
+                            {
+                                "type": "stemmer",
+                                "language": "english"
+                            }
+                        ]
+                    }
                 }
             },
             {

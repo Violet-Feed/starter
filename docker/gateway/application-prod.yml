@@ -13,6 +13,11 @@ grpc:
     aigc:
       address: 'static://aigc:3005'
       negotiation-type: plaintext
+spring:
+  redis:
+    host: redis
+    port: 6379
+    password:
 aliyun:
   oss:
     endpoint: https://oss-cn-beijing.aliyuncs.com

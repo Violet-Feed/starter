@@ -1,18 +1,11 @@
-# Create Space 
 CREATE SPACE `violet` (partition_num = 10, replica_factor = 1, charset = utf8, collate = utf8_bin, vid_type = FIXED_STRING(30));
 :sleep 20;
 USE `violet`;
 
-# Create Tag: 
 CREATE TAG `entity` ( `entity_type` string NOT NULL, `entity_id` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE TAG `user` ( `user_id` int64 NOT NULL, `username` string NOT NULL, `avatar` string NULL) ttl_duration = 0, ttl_col = "";
 
-# Create Edge: 
 CREATE EDGE `author` ( `ts` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE EDGE `comment` ( `ts` int64 NOT NULL, `digg` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE EDGE `digg` ( `ts` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
 CREATE EDGE `follow` ( `ts` int64 NOT NULL) ttl_duration = 0, ttl_col = "";
-:sleep 5;
-
-CREATE TAG INDEX `entity_index` on `entity`(`entity_type`(10), `entity_id`) 
-CREATE TAG INDEX `user_id_index` ON `user` ( `user_id`);

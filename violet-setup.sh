@@ -47,6 +47,116 @@ clone_repos() {
     log_success "All repositories ready."
 }
 
+prepare_aigc_ffmpeg() {
+    log_info "Preparing static ffmpeg for aigc..."
+
+    local aigc_dir="$REPOS_DIR/aigc"
+    local bin_dir="$aigc_dir/bin"
+    local tmp_dir="/tmp/violet-ffmpeg-static"
+    local arch
+    local github_asset_url
+    local mirror_url
+    local proxy_prefix="https://gh-proxy.com/"
+
+    if [ ! -d "$aigc_dir" ]; then
+        log_error "AIGC repository not found: $aigc_dir"
+        log_error "Run '$0 clone' or '$0 setup' first."
+        exit 1
+    fi
+
+    mkdir -p "$bin_dir"
+
+    if [ -x "$bin_dir/ffmpeg" ] && [ -x "$bin_dir/ffprobe" ]; then
+        if timeout 10s "$bin_dir/ffmpeg" -version >/dev/null 2>&1 && \
+           timeout 10s "$bin_dir/ffprobe" -version >/dev/null 2>&1; then
+            log_success "Static ffmpeg already exists and works."
+            return 0
+        fi
+
+        log_warning "Existing ffmpeg is not usable. Re-downloading..."
+        rm -f "$bin_dir/ffmpeg" "$bin_dir/ffprobe"
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        log_error "curl is required to download ffmpeg."
+        exit 1
+    fi
+
+    if ! command -v tar >/dev/null 2>&1; then
+        log_error "tar is required to extract ffmpeg."
+        exit 1
+    fi
+
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64|amd64)
+            github_asset_url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+            ;;
+        aarch64|arm64)
+            github_asset_url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+            ;;
+        *)
+            log_error "Unsupported architecture: $arch"
+            exit 1
+            ;;
+    esac
+
+    mirror_url="${proxy_prefix}${github_asset_url}"
+
+    log_info "Architecture: $arch"
+    log_info "Using public GitHub mirror:"
+    log_info "$mirror_url"
+
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+
+    curl -L \
+        --retry 10 \
+        --retry-delay 5 \
+        --connect-timeout 20 \
+        --max-time 3600 \
+        -o "$tmp_dir/ffmpeg-static.tar.xz" \
+        "$mirror_url"
+
+    log_info "Extracting ffmpeg..."
+
+    tar -xJf "$tmp_dir/ffmpeg-static.tar.xz" \
+        -C "$tmp_dir"
+
+    local ffmpeg_bin
+    local ffprobe_bin
+
+    ffmpeg_bin="$(find "$tmp_dir" -type f -name ffmpeg | head -1 || true)"
+    ffprobe_bin="$(find "$tmp_dir" -type f -name ffprobe | head -1 || true)"
+
+    if [ -z "$ffmpeg_bin" ] || [ ! -f "$ffmpeg_bin" ]; then
+        log_error "ffmpeg binary not found after extraction."
+        exit 1
+    fi
+
+    if [ -z "$ffprobe_bin" ] || [ ! -f "$ffprobe_bin" ]; then
+        log_error "ffprobe binary not found after extraction."
+        exit 1
+    fi
+
+    cp "$ffmpeg_bin" "$bin_dir/ffmpeg"
+    cp "$ffprobe_bin" "$bin_dir/ffprobe"
+
+    chmod +x "$bin_dir/ffmpeg" "$bin_dir/ffprobe"
+
+    log_info "Testing static ffmpeg..."
+
+    timeout 10s "$bin_dir/ffmpeg" -version >/dev/null
+    timeout 10s "$bin_dir/ffprobe" -version >/dev/null
+
+    rm -rf "$tmp_dir"
+
+    log_success "Static ffmpeg prepared:"
+    echo "  $bin_dir/ffmpeg"
+    echo "  $bin_dir/ffprobe"
+}
+
 copy_dockerfiles() {
     log_info "Copying Dockerfiles into repository directories..."
 
@@ -60,6 +170,16 @@ copy_dockerfiles() {
     for repo in "${repos[@]}"; do
         if ! grep -q "Dockerfile" "$REPOS_DIR/$repo/.git/info/exclude" 2>/dev/null; then
             echo "Dockerfile" >> "$REPOS_DIR/$repo/.git/info/exclude"
+        fi
+
+        if [ "$repo" = "aigc" ]; then
+            if ! grep -q "^bin/ffmpeg$" "$REPOS_DIR/$repo/.git/info/exclude" 2>/dev/null; then
+                echo "bin/ffmpeg" >> "$REPOS_DIR/$repo/.git/info/exclude"
+            fi
+
+            if ! grep -q "^bin/ffprobe$" "$REPOS_DIR/$repo/.git/info/exclude" 2>/dev/null; then
+                echo "bin/ffprobe" >> "$REPOS_DIR/$repo/.git/info/exclude"
+            fi
         fi
     done
 
@@ -101,6 +221,20 @@ check_repo_readiness() {
         log_info "$repo: pom.xml OK"
     done
 
+    if [ ! -f "$REPOS_DIR/aigc/bin/ffmpeg" ]; then
+        log_error "aigc: missing static ffmpeg at $REPOS_DIR/aigc/bin/ffmpeg"
+        log_error "Run '$0 ffmpeg' first."
+        exit 1
+    fi
+
+    if [ ! -f "$REPOS_DIR/aigc/bin/ffprobe" ]; then
+        log_error "aigc: missing static ffprobe at $REPOS_DIR/aigc/bin/ffprobe"
+        log_error "Run '$0 ffmpeg' first."
+        exit 1
+    fi
+
+    log_info "aigc: static ffmpeg OK"
+
     if [ ! -f "$REPOS_DIR/im/go.mod" ]; then
         log_error "im: go.mod not found at repo root"
         exit 1
@@ -118,6 +252,8 @@ check_repo_readiness() {
 
 build_images() {
     log_info "Building Docker images (this may take a while)..."
+
+    prepare_aigc_ffmpeg
 
     (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml build gateway)
     log_success "gateway image built."
@@ -154,7 +290,7 @@ start_backend() {
 }
 
 stop_backend() {
-    local svc="${2:-}"
+    local svc="${1:-}"
     if [ -n "$svc" ]; then
         log_info "Stopping $svc..."
         (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml stop "$svc")
@@ -166,7 +302,7 @@ stop_backend() {
 }
 
 restart_backend() {
-    local svc="${2:-}"
+    local svc="${1:-}"
     if [ -n "$svc" ]; then
         log_info "Restarting $svc..."
         (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml restart "$svc")
@@ -178,7 +314,7 @@ restart_backend() {
 }
 
 logs_backend() {
-    local svc="${2:-}"
+    local svc="${1:-}"
     if [ -n "$svc" ]; then
         (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml logs -f "$svc")
     else
@@ -187,12 +323,20 @@ logs_backend() {
 }
 
 rebuild_backend() {
-    local svc="${2:-}"
+    local svc="${1:-}"
     if [ -n "$svc" ]; then
         log_info "Rebuilding $svc..."
+
+        if [ "$svc" = "aigc" ]; then
+            prepare_aigc_ffmpeg
+        fi
+
         (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml build --no-cache "$svc" && docker compose -f violet-docker-compose.yaml up -d "$svc")
     else
         log_info "Rebuilding all backend services..."
+
+        prepare_aigc_ffmpeg
+
         (cd "$SCRIPT_DIR" && docker compose -f violet-docker-compose.yaml build --no-cache gateway action aigc im chatbot && docker compose -f violet-docker-compose.yaml up -d gateway action aigc im chatbot)
     fi
     log_success "Rebuilt and restarted."
@@ -203,14 +347,15 @@ show_help() {
     echo ""
     echo "Commands:"
     echo "  clone     Clone or update all Violet-Feed backend repos"
-    echo "  setup     Clone repos + copy Dockerfiles + check readiness"
+    echo "  setup     Clone repos + copy Dockerfiles + prepare ffmpeg + check readiness"
+    echo "  ffmpeg    Download static ffmpeg into repos/aigc/bin"
     echo "  build     Build all backend Docker images"
     echo "  start     Start backend services"
-    echo "  stop       Stop backend services [service]"
+    echo "  stop      Stop backend services [service]"
     echo "  restart   Restart backend services [service]"
-    echo "  logs       Tail logs of backend services [service]"
+    echo "  logs      Tail logs of backend services [service]"
     echo "  rebuild   Rebuild (no-cache) and restart [service]"
-    echo "  all       Full setup: clone -> copy -> check -> build -> start"
+    echo "  all       Full setup: clone -> copy -> prepare ffmpeg -> check -> build -> start"
     echo ""
     echo "Service names: gateway, action, aigc, im, chatbot"
     echo "Omit [service] to target all backend services."
@@ -227,11 +372,16 @@ main() {
         setup)
             clone_repos
             copy_dockerfiles
+            prepare_aigc_ffmpeg
             check_repo_readiness
             log_success "Setup complete. Run '$0 build' to build images."
             ;;
+        ffmpeg)
+            prepare_aigc_ffmpeg
+            ;;
         build)
             check_dockerfiles
+            prepare_aigc_ffmpeg
             check_repo_readiness
             build_images
             ;;
@@ -253,6 +403,7 @@ main() {
         all)
             clone_repos
             copy_dockerfiles
+            prepare_aigc_ffmpeg
             check_repo_readiness
             build_images
             echo ""

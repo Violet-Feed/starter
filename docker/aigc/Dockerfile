@@ -15,6 +15,7 @@ RUN mkdir -p /usr/share/maven/conf && \
 EOF
 
 WORKDIR /build
+
 COPY pom.xml .
 
 RUN --mount=type=cache,target=/root/.m2 \
@@ -31,12 +32,12 @@ FROM amazoncorretto:8-al2023-jre
 
 WORKDIR /app
 
-# 安装 ffmpeg
-RUN dnf install -y spal-release && \
-    dnf install -y ffmpeg-free && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf && \
-    ffmpeg -version
+COPY bin/ffmpeg /usr/local/bin/ffmpeg
+COPY bin/ffprobe /usr/local/bin/ffprobe
+
+RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    timeout 10s /usr/local/bin/ffmpeg -version && \
+    timeout 10s /usr/local/bin/ffprobe -version
 
 RUN mkdir -p /app/config
 
